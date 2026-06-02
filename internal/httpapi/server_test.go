@@ -506,10 +506,12 @@ func TestThemeProxyProxiesRegisteredRouteToLocalDevServer(t *testing.T) {
 	var upstreamPath string
 	var upstreamQuery string
 	var upstreamHost string
+	var upstreamForwardedHost string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		upstreamPath = r.URL.Path
 		upstreamQuery = r.URL.RawQuery
 		upstreamHost = r.Host
+		upstreamForwardedHost = r.Header.Get("X-Forwarded-Host")
 		w.Header().Set("X-Upstream", "vite")
 		_, _ = w.Write([]byte("proxied theme dev server"))
 	}))
@@ -586,8 +588,12 @@ func TestThemeProxyProxiesRegisteredRouteToLocalDevServer(t *testing.T) {
 	if upstreamQuery != "foo=bar" {
 		t.Fatalf("upstream query = %q, want %q", upstreamQuery, "foo=bar")
 	}
-	if upstreamHost != "91-98-82-198-heya-service.twalab.cloud" {
-		t.Fatalf("upstream host = %q, want public proxy host", upstreamHost)
+	wantUpstreamHost := net.JoinHostPort("127.0.0.1", strconv.Itoa(upstreamPort))
+	if upstreamHost != wantUpstreamHost {
+		t.Fatalf("upstream host = %q, want local target host %q", upstreamHost, wantUpstreamHost)
+	}
+	if upstreamForwardedHost != "91-98-82-198-heya-service.twalab.cloud" {
+		t.Fatalf("X-Forwarded-Host = %q, want public proxy host", upstreamForwardedHost)
 	}
 
 	req := runner.lastRequest()

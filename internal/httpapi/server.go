@@ -301,7 +301,7 @@ func (s *Server) proxyDevServer(w http.ResponseWriter, r *http.Request, req dev.
 		proxyReq.URL.Path = upstreamPath
 		proxyReq.URL.RawPath = ""
 		proxyReq.URL.RawQuery = upstreamQuery
-		proxyReq.Host = r.Host
+		proxyReq.Host = target.Host
 		proxyReq.Header.Set("X-Forwarded-Host", r.Host)
 		proxyReq.Header.Set("X-Forwarded-Proto", requestScheme(r))
 		if req.DevServerBasePath != "" {
