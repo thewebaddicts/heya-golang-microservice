@@ -29,6 +29,37 @@ func TestResolveProjectDirRejectsPathsOutsideBase(t *testing.T) {
 	}
 }
 
+func TestLoadDefaultsDevServerBindHost(t *testing.T) {
+	base := t.TempDir()
+	t.Setenv("HEYA_PROJECT_BASE_DIR", base)
+	t.Setenv("HEYA_DEFAULT_PROJECT_DIR", base)
+	t.Setenv("HEYA_DEV_SERVER_BIND_HOST", "")
+	t.Setenv("DEV_SERVER_HOST", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.DevServerBindHost != "0.0.0.0" {
+		t.Fatalf("DevServerBindHost = %q, want %q", cfg.DevServerBindHost, "0.0.0.0")
+	}
+}
+
+func TestLoadUsesConfiguredDevServerBindHost(t *testing.T) {
+	base := t.TempDir()
+	t.Setenv("HEYA_PROJECT_BASE_DIR", base)
+	t.Setenv("HEYA_DEFAULT_PROJECT_DIR", base)
+	t.Setenv("HEYA_DEV_SERVER_BIND_HOST", "127.0.0.1")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.DevServerBindHost != "127.0.0.1" {
+		t.Fatalf("DevServerBindHost = %q, want %q", cfg.DevServerBindHost, "127.0.0.1")
+	}
+}
+
 func TestEnvOriginListUsesFallback(t *testing.T) {
 	t.Setenv("HEYA_WEBSOCKET_ALLOWED_ORIGINS", "")
 

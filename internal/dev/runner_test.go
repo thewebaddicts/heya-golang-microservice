@@ -10,16 +10,24 @@ import (
 )
 
 func TestShellDevCommandUsesNPMAndPort(t *testing.T) {
-	got := shellDevCommand("npm", 3002)
-	want := "'npm' run dev -- --port 3002"
+	got := shellDevCommand("npm", "0.0.0.0", 3002)
+	want := "'npm' run dev -- --host '0.0.0.0' --port 3002"
 	if got != want {
 		t.Fatalf("shellDevCommand() = %q, want %q", got, want)
 	}
 }
 
 func TestShellDevCommandQuotesNPMPath(t *testing.T) {
-	got := shellDevCommand("/path with spaces/npm", 3002)
-	want := "'/path with spaces/npm' run dev -- --port 3002"
+	got := shellDevCommand("/path with spaces/npm", "0.0.0.0", 3002)
+	want := "'/path with spaces/npm' run dev -- --host '0.0.0.0' --port 3002"
+	if got != want {
+		t.Fatalf("shellDevCommand() = %q, want %q", got, want)
+	}
+}
+
+func TestShellDevCommandDefaultsBindHost(t *testing.T) {
+	got := shellDevCommand("npm", "", 3002)
+	want := "'npm' run dev -- --host '0.0.0.0' --port 3002"
 	if got != want {
 		t.Fatalf("shellDevCommand() = %q, want %q", got, want)
 	}
@@ -100,6 +108,36 @@ func TestDevReadyURLUsesConfiguredHost(t *testing.T) {
 	want := "http://127.0.0.1:12036"
 	if got != want {
 		t.Fatalf("devReadyURL() = %q, want %q", got, want)
+	}
+}
+
+func TestDevServerBindHostDefaultsToAllInterfaces(t *testing.T) {
+	runner := NewLocalRunner(config.Config{}, nil)
+
+	got := runner.devServerBindHost()
+	want := "0.0.0.0"
+	if got != want {
+		t.Fatalf("devServerBindHost() = %q, want %q", got, want)
+	}
+}
+
+func TestDevBindURLUsesConfiguredBindHost(t *testing.T) {
+	runner := NewLocalRunner(config.Config{}, nil)
+
+	got := runner.devBindURL(12036, "0.0.0.0")
+	want := "http://0.0.0.0:12036"
+	if got != want {
+		t.Fatalf("devBindURL() = %q, want %q", got, want)
+	}
+}
+
+func TestDevLocalURLUsesLocalhost(t *testing.T) {
+	runner := NewLocalRunner(config.Config{}, nil)
+
+	got := runner.devLocalURL(12036)
+	want := "http://localhost:12036"
+	if got != want {
+		t.Fatalf("devLocalURL() = %q, want %q", got, want)
 	}
 }
 

@@ -80,7 +80,8 @@ func (r *LocalRunner) Run(ctx context.Context, req RunRequest) (RunResult, error
 	}
 	defer logWriter.Close()
 
-	command := shellDevCommand(r.cfg.NPMBin, port)
+	bindHost := r.devServerBindHost()
+	command := shellDevCommand(r.cfg.NPMBin, bindHost, port)
 	cmd := exec.Command(r.cfg.CommandShell, shellArgs(r.cfg.CommandShell, command)...)
 	cmd.Dir = projectDir
 	cmd.Env = shellEnvironment(os.Environ())
@@ -115,6 +116,8 @@ func (r *LocalRunner) Run(ctx context.Context, req RunRequest) (RunResult, error
 		StartedAt:    startedAt,
 	}
 	readyURL := r.devReadyURL(port)
+	localURL := r.devLocalURL(port)
+	bindURL := r.devBindURL(port, bindHost)
 
 	r.logger.Info("started SolidJS dev server",
 		"projectPath", result.ProjectPath,
@@ -122,6 +125,9 @@ func (r *LocalRunner) Run(ctx context.Context, req RunRequest) (RunResult, error
 		"pid", result.PID,
 		"target", result.Target,
 		"logFile", result.LogFile,
+		"command", result.Command,
+		"localURL", localURL,
+		"bindURL", bindURL,
 		"devServerURL", result.DevServerURL,
 		"readyURL", readyURL,
 	)
@@ -136,6 +142,8 @@ func (r *LocalRunner) Run(ctx context.Context, req RunRequest) (RunResult, error
 	r.logger.Info("SolidJS dev server is ready",
 		"projectPath", result.ProjectPath,
 		"port", result.Port,
+		"localURL", localURL,
+		"bindURL", bindURL,
 		"url", result.DevServerURL,
 		"pid", result.PID,
 	)
@@ -164,6 +172,22 @@ func (r *LocalRunner) devReadyURL(port int) string {
 		host = "localhost"
 	}
 	return serverURL("http", host, port)
+}
+
+func (r *LocalRunner) devLocalURL(port int) string {
+	return serverURL("http", "localhost", port)
+}
+
+func (r *LocalRunner) devBindURL(port int, bindHost string) string {
+	return serverURL("http", bindHost, port)
+}
+
+func (r *LocalRunner) devServerBindHost() string {
+	host := strings.TrimSpace(r.cfg.DevServerBindHost)
+	if host == "" {
+		return "0.0.0.0"
+	}
+	return host
 }
 
 func serverURL(scheme, host string, port int) string {
@@ -250,12 +274,16 @@ func validateProjectDir(projectDir string) error {
 	return nil
 }
 
-func shellDevCommand(npmBin string, port int) string {
+func shellDevCommand(npmBin, bindHost string, port int) string {
 	npmBin = strings.TrimSpace(npmBin)
 	if npmBin == "" {
 		npmBin = "npm"
 	}
-	return shellQuote(npmBin) + " run dev -- --port " + strconv.Itoa(port)
+	bindHost = strings.TrimSpace(bindHost)
+	if bindHost == "" {
+		bindHost = "0.0.0.0"
+	}
+	return shellQuote(npmBin) + " run dev -- --host " + shellQuote(bindHost) + " --port " + strconv.Itoa(port)
 }
 
 func shellArgs(shellPath, command string) []string {

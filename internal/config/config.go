@@ -17,6 +17,7 @@ type Config struct {
 	DefaultDevPort          int
 	DevServerScheme         string
 	DevServerHost           string
+	DevServerBindHost       string
 	DevReadyHost            string
 	WebSocketAllowedOrigins []string
 	LogDir                  string
@@ -89,6 +90,7 @@ func Load() (Config, error) {
 		DefaultDevPort:          defaultPort,
 		DevServerScheme:         envString("HEYA_DEV_SERVER_SCHEME", "http"),
 		DevServerHost:           envString("HEYA_DEV_SERVER_HOST", "localhost"),
+		DevServerBindHost:       envString("HEYA_DEV_SERVER_BIND_HOST", envString("DEV_SERVER_HOST", "0.0.0.0")),
 		DevReadyHost:            envString("HEYA_DEV_READY_HOST", "localhost"),
 		WebSocketAllowedOrigins: webSocketAllowedOrigins,
 		LogDir:                  envString("HEYA_LOG_DIR", "/tmp/heya-solidjs-manager/logs"),

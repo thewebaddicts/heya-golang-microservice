@@ -19,6 +19,7 @@ Important values:
 - `HEYA_DEFAULT_PROJECT_DIR`: optional default SolidJS project directory
 - `HEYA_DEFAULT_DEV_PORT`: default SolidJS dev port, default `3002`
 - `HEYA_DEV_SERVER_HOST`: host returned to WebSocket clients, default `localhost`
+- `HEYA_DEV_SERVER_BIND_HOST`: host passed to Vite with `--host`, default `0.0.0.0`; `DEV_SERVER_HOST` is also accepted as a fallback
 - `HEYA_DEV_SERVER_SCHEME`: scheme returned to WebSocket clients, default `http`
 - `HEYA_DEV_READY_HOST`: host used by the service to check local dev server readiness, default `localhost`
 - `HEYA_WEBSOCKET_ALLOWED_ORIGINS`: comma-separated browser origins allowed to open WebSockets, default `https://admin.thewebaddicts.com`

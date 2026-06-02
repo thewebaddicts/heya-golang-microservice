@@ -30,6 +30,7 @@ func main() {
 		"defaultProjectDir", cfg.DefaultProjectDir,
 		"defaultDevPort", cfg.DefaultDevPort,
 		"commandShell", cfg.CommandShell,
+		"devServerBindHost", cfg.DevServerBindHost,
 		"devReadyHost", cfg.DevReadyHost,
 		"webSocketAllowedOrigins", cfg.WebSocketAllowedOrigins,
 		"devReadyTimeout", cfg.DevReadyTimeout,
