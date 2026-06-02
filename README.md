@@ -61,7 +61,7 @@ To open a specific app route through the proxy, pass `previewPath`:
 ws://localhost:8998/dev/run?projectUser=energybri_6a19492405faf&previewPath=/themes/57726969-9e2e-11ed-9f8e-42010a960004/z-6a1ef6c3dcca6&preview=true
 ```
 
-If the caller already has a full preview URL, pass it as `previewUrl`. The service also accepts `pageUrl` when the browser already knows the current admin page URL.
+If the caller already has a full preview URL, pass it as `previewUrl`. The service also accepts `pageUrl` when the browser already knows the current admin page URL. If none of those values are provided, the service falls back to the WebSocket request's `Referer` header when it contains a `/themes/{store uuid}/{installation id}` path.
 
 The service also accepts `storeUUID` plus `installationID` and builds the matching `/themes/{store uuid}/{installation id}` path.
 

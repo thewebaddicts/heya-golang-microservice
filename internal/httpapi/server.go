@@ -453,7 +453,7 @@ func (s *Server) devRunProxyURLs(r *http.Request, projectUser, serverIP string) 
 	if projectUser == "" {
 		return devRunProxyURLs{}, nil
 	}
-	appPath, appQueryFromURL, err := devProxyAppPathFromQuery(r.URL.Query())
+	appPath, appQueryFromURL, err := devProxyAppPathFromRequest(r)
 	if err != nil {
 		return devRunProxyURLs{}, err
 	}
@@ -492,6 +492,27 @@ func (s *Server) devRunProxyURLs(r *http.Request, projectUser, serverIP string) 
 		BasePath: basePath,
 		IsTheme:  isTheme,
 	}, nil
+}
+
+func devProxyAppPathFromRequest(r *http.Request) (string, string, error) {
+	appPath, appQuery, err := devProxyAppPathFromQuery(r.URL.Query())
+	if err != nil || appPath != "" || appQuery != "" {
+		return appPath, appQuery, err
+	}
+
+	referer := strings.TrimSpace(r.Header.Get("Referer"))
+	if referer == "" {
+		return "", "", nil
+	}
+
+	appPath, appQuery, err = normalizeDevProxyAppURL(referer)
+	if err != nil {
+		return "", "", err
+	}
+	if _, ok := themeProxyBasePath(appPath); !ok {
+		return "", "", nil
+	}
+	return appPath, appQuery, nil
 }
 
 func devProxyAppPathFromQuery(values url.Values) (string, string, error) {
