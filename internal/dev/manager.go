@@ -71,6 +71,35 @@ func (m *Manager) Acquire(ctx context.Context, req RunRequest) (*Lease, error) {
 				session.idleTimer.Stop()
 				session.idleTimer = nil
 			}
+			if !sessionMatchesRequest(session.result, normalized) {
+				result := session.result
+				session.stopping = true
+				session.ready = make(chan struct{})
+				m.mu.Unlock()
+
+				m.logger.Info("restarting SolidJS dev server with updated proxy configuration",
+					"projectPath", result.ProjectPath,
+					"port", result.Port,
+					"oldBasePath", result.DevServerBasePath,
+					"newBasePath", normalized.DevServerBasePath,
+					"oldPublicHost", result.DevServerPublicHost,
+					"newPublicHost", normalized.DevServerPublicHost,
+				)
+
+				stopErr := m.runner.Stop(ctx, result)
+
+				m.mu.Lock()
+				if current, ok := m.sessions[key]; ok && current == session {
+					delete(m.sessions, key)
+				}
+				close(session.ready)
+				m.mu.Unlock()
+
+				if stopErr != nil {
+					return nil, stopErr
+				}
+				continue
+			}
 			session.connections++
 			count := session.connections
 			result := session.result
@@ -273,4 +302,9 @@ func (m *Manager) normalize(req RunRequest) (RunRequest, string, error) {
 	}
 	key := fmt.Sprintf("%s:%d", projectDir, port)
 	return normalized, key, nil
+}
+
+func sessionMatchesRequest(result RunResult, req RunRequest) bool {
+	return normalizeDevServerBasePath(result.DevServerBasePath) == normalizeDevServerBasePath(req.DevServerBasePath) &&
+		result.DevServerPublicHost == req.DevServerPublicHost
 }

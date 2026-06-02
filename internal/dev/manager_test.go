@@ -14,14 +14,16 @@ type fakeRunner struct {
 	stopCount int
 }
 
-func (r *fakeRunner) Run(context.Context, RunRequest) (RunResult, error) {
+func (r *fakeRunner) Run(_ context.Context, req RunRequest) (RunResult, error) {
 	r.runCount++
 	return RunResult{
-		ProjectPath:  "/tmp/solid-app",
-		Port:         3002,
-		DevServerURL: "http://localhost:3002",
-		PID:          "12345",
-		StartedAt:    time.Now().UTC(),
+		ProjectPath:         "/tmp/solid-app",
+		Port:                3002,
+		DevServerURL:        "http://localhost:3002",
+		DevServerBasePath:   normalizeDevServerBasePath(req.DevServerBasePath),
+		DevServerPublicHost: req.DevServerPublicHost,
+		PID:                 "12345",
+		StartedAt:           time.Now().UTC(),
 	}, nil
 }
 
@@ -111,6 +113,82 @@ func TestManagerCancelsIdleStopWhenConnectionReturns(t *testing.T) {
 		t.Fatalf("second Release() error = %v", err)
 	}
 	waitForManagerStopCount(t, runner, 1)
+}
+
+func TestManagerRestartsWhenBasePathChanges(t *testing.T) {
+	runner := &fakeRunner{}
+	manager := NewManager(config.Config{
+		ProjectBaseDir:    "/tmp",
+		DefaultProjectDir: "/tmp/solid-app",
+		DefaultDevPort:    3002,
+		DevIdleTimeout:    50 * time.Millisecond,
+	}, runner, slog.Default())
+
+	first, err := manager.Acquire(context.Background(), RunRequest{DevServerBasePath: "/dev/proxy/user/"})
+	if err != nil {
+		t.Fatalf("first Acquire() error = %v", err)
+	}
+	second, err := manager.Acquire(context.Background(), RunRequest{DevServerBasePath: "/themes/store/install/"})
+	if err != nil {
+		t.Fatalf("second Acquire() error = %v", err)
+	}
+	defer func() {
+		_ = second.Release(context.Background())
+	}()
+
+	if runner.runCount != 2 {
+		t.Fatalf("runCount = %d, want 2", runner.runCount)
+	}
+	if runner.stopCount != 1 {
+		t.Fatalf("stopCount = %d, want 1", runner.stopCount)
+	}
+	if second.Result.DevServerBasePath != "/themes/store/install/" {
+		t.Fatalf("second base path = %q, want theme base path", second.Result.DevServerBasePath)
+	}
+	if err := first.Release(context.Background()); err != nil {
+		t.Fatalf("first Release() error = %v", err)
+	}
+}
+
+func TestManagerRestartsWhenPublicHostChanges(t *testing.T) {
+	runner := &fakeRunner{}
+	manager := NewManager(config.Config{
+		ProjectBaseDir:    "/tmp",
+		DefaultProjectDir: "/tmp/solid-app",
+		DefaultDevPort:    3002,
+		DevIdleTimeout:    50 * time.Millisecond,
+	}, runner, slog.Default())
+
+	first, err := manager.Acquire(context.Background(), RunRequest{
+		DevServerBasePath:   "/themes/store/install/",
+		DevServerPublicHost: "old.example.com",
+	})
+	if err != nil {
+		t.Fatalf("first Acquire() error = %v", err)
+	}
+	second, err := manager.Acquire(context.Background(), RunRequest{
+		DevServerBasePath:   "/themes/store/install/",
+		DevServerPublicHost: "new.example.com",
+	})
+	if err != nil {
+		t.Fatalf("second Acquire() error = %v", err)
+	}
+	defer func() {
+		_ = second.Release(context.Background())
+	}()
+
+	if runner.runCount != 2 {
+		t.Fatalf("runCount = %d, want 2", runner.runCount)
+	}
+	if runner.stopCount != 1 {
+		t.Fatalf("stopCount = %d, want 1", runner.stopCount)
+	}
+	if second.Result.DevServerPublicHost != "new.example.com" {
+		t.Fatalf("second public host = %q, want new.example.com", second.Result.DevServerPublicHost)
+	}
+	if err := first.Release(context.Background()); err != nil {
+		t.Fatalf("first Release() error = %v", err)
+	}
 }
 
 func waitForManagerStopCount(t *testing.T, runner *fakeRunner, want int) {
