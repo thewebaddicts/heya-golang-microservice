@@ -293,7 +293,6 @@ func idleSubscription(sourceDir string, mode string) *Subscription {
 		SourceProjectPath: sourceDir,
 		Running:           false,
 	}
-	close(events)
 	return &Subscription{
 		Events:  events,
 		release: func() {},

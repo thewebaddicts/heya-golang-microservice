@@ -1028,6 +1028,46 @@ func TestBuildRunWebSocketWatchAttachesAfterDisconnect(t *testing.T) {
 	}
 }
 
+func TestBuildRunWebSocketIdleWatchStaysOpenUntilClientCloses(t *testing.T) {
+	projectDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(projectDir, "package.json"), []byte(`{"scripts":{"build":"node build.mjs"}}`), 0o644); err != nil {
+		t.Fatalf("write package.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDir, "build.mjs"), []byte(`console.log("building");`), 0o644); err != nil {
+		t.Fatalf("write build.mjs: %v", err)
+	}
+
+	runner := &fakeRunner{}
+	server := NewServer(config.Config{
+		ProjectBaseDir:    projectDir,
+		DefaultProjectDir: projectDir,
+		DefaultDevPort:    3002,
+		NPMBin:            "npm",
+		CommandShell:      "/bin/zsh",
+	}, runner, slog.Default())
+	testServer := httptest.NewServer(server.Routes())
+	defer testServer.Close()
+
+	conn := dialWebSocket(t, "ws"+strings.TrimPrefix(testServer.URL, "http")+"/build/run?watch=true")
+	defer conn.Close()
+
+	message := readWebSocketMap(t, conn)
+	if message["type"] != "build_status" || message["status"] != "idle" {
+		t.Fatalf("message = %#v, want idle build_status", message)
+	}
+
+	if err := conn.SetReadDeadline(time.Now().Add(150 * time.Millisecond)); err != nil {
+		t.Fatalf("SetReadDeadline() error = %v", err)
+	}
+	_, _, err := conn.NextReader()
+	if err == nil {
+		t.Fatal("NextReader() error = nil, want timeout while idle watch stays open")
+	}
+	if netErr, ok := err.(net.Error); !ok || !netErr.Timeout() {
+		t.Fatalf("NextReader() error = %v, want timeout", err)
+	}
+}
+
 func TestWebSocketOriginValidation(t *testing.T) {
 	tests := []struct {
 		name           string
