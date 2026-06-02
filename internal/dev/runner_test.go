@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"heya-golang-microservice/internal/config"
 )
 
 func TestShellDevCommandUsesNPMAndPort(t *testing.T) {
@@ -59,6 +61,45 @@ func TestParseProcessID(t *testing.T) {
 	}
 	if got != 12345 {
 		t.Fatalf("parseProcessID() = %d, want %d", got, 12345)
+	}
+}
+
+func TestDevServerURLUsesPublicHostOverride(t *testing.T) {
+	runner := NewLocalRunner(config.Config{
+		DevServerScheme: "http",
+		DevServerHost:   "localhost",
+		DevReadyHost:    "localhost",
+	}, nil)
+
+	got := runner.devServerURL(12036, "91.98.82.198")
+	want := "http://91.98.82.198:12036"
+	if got != want {
+		t.Fatalf("devServerURL() = %q, want %q", got, want)
+	}
+}
+
+func TestDevReadyURLDefaultsToLocalhost(t *testing.T) {
+	runner := NewLocalRunner(config.Config{
+		DevServerScheme: "http",
+		DevServerHost:   "91.98.82.198",
+	}, nil)
+
+	got := runner.devReadyURL(12036)
+	want := "http://localhost:12036"
+	if got != want {
+		t.Fatalf("devReadyURL() = %q, want %q", got, want)
+	}
+}
+
+func TestDevReadyURLUsesConfiguredHost(t *testing.T) {
+	runner := NewLocalRunner(config.Config{
+		DevReadyHost: "127.0.0.1",
+	}, nil)
+
+	got := runner.devReadyURL(12036)
+	want := "http://127.0.0.1:12036"
+	if got != want {
+		t.Fatalf("devReadyURL() = %q, want %q", got, want)
 	}
 }
 

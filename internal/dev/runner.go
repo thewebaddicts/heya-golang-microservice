@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -113,6 +114,7 @@ func (r *LocalRunner) Run(ctx context.Context, req RunRequest) (RunResult, error
 		Target:       "local",
 		StartedAt:    startedAt,
 	}
+	readyURL := r.devReadyURL(port)
 
 	r.logger.Info("started SolidJS dev server",
 		"projectPath", result.ProjectPath,
@@ -120,9 +122,11 @@ func (r *LocalRunner) Run(ctx context.Context, req RunRequest) (RunResult, error
 		"pid", result.PID,
 		"target", result.Target,
 		"logFile", result.LogFile,
+		"devServerURL", result.DevServerURL,
+		"readyURL", readyURL,
 	)
 
-	if err := r.waitUntilReady(ctx, result.DevServerURL, exited); err != nil {
+	if err := r.waitUntilReady(ctx, readyURL, exited); err != nil {
 		stopCtx, cancel := context.WithTimeout(context.Background(), r.processStopTimeout())
 		defer cancel()
 		_ = terminateProcessGroup(stopCtx, cmd.Process.Pid)
@@ -151,7 +155,19 @@ func (r *LocalRunner) devServerURL(port int, hostOverride string) string {
 	if host == "" {
 		host = "localhost"
 	}
-	return fmt.Sprintf("%s://%s:%d", scheme, host, port)
+	return serverURL(scheme, host, port)
+}
+
+func (r *LocalRunner) devReadyURL(port int) string {
+	host := strings.TrimSpace(r.cfg.DevReadyHost)
+	if host == "" {
+		host = "localhost"
+	}
+	return serverURL("http", host, port)
+}
+
+func serverURL(scheme, host string, port int) string {
+	return fmt.Sprintf("%s://%s", scheme, net.JoinHostPort(host, strconv.Itoa(port)))
 }
 
 func (r *LocalRunner) waitUntilReady(ctx context.Context, url string, exited <-chan error) error {
