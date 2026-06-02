@@ -117,6 +117,16 @@ func (s *Server) handleDevRunWebSocket(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
+	proxyAppURL, proxyRootURL, err := s.devProxyResponseURLs(r, projectUser, req.DevServerHost)
+	if err != nil {
+		_ = conn.WriteJSON(map[string]string{
+			"type":   "error",
+			"status": "failed",
+			"error":  err.Error(),
+		})
+		return
+	}
+
 	payload := map[string]any{
 		"type":         "dev_server",
 		"status":       "running",
@@ -126,11 +136,10 @@ func (s *Server) handleDevRunWebSocket(w http.ResponseWriter, r *http.Request) {
 		"run":          lease.Result,
 	}
 	if projectUser != "" {
-		proxyURL := s.absoluteDevProxyURL(r, projectUser, req.DevServerHost)
 		run := lease.Result
-		run.DevServerURL = proxyURL
-		payload["devServerURL"] = proxyURL
-		payload["devProxyURL"] = proxyURL
+		run.DevServerURL = proxyAppURL
+		payload["devServerURL"] = proxyAppURL
+		payload["devProxyURL"] = proxyRootURL
 		payload["run"] = run
 	}
 	if err := conn.WriteJSON(payload); err != nil {
@@ -291,7 +300,7 @@ func cleanDevProxyQuery(values url.Values) url.Values {
 	cleaned := make(url.Values, len(values))
 	for key, value := range values {
 		switch key {
-		case "projectUser", "projectPath", "port":
+		case "projectUser", "projectPath", "port", "previewPath", "proxyPath", "storeUUID", "storeUuid", "store_uuid", "installationID", "installationId", "installation_id":
 			continue
 		default:
 			cleaned[key] = append([]string(nil), value...)
@@ -320,6 +329,74 @@ func (s *Server) resolveDevProjectUser(ctx context.Context, projectUser string, 
 
 func devProxyBasePath(projectUser string) string {
 	return "/dev/proxy/" + url.PathEscape(projectUser) + "/"
+}
+
+func (s *Server) devProxyResponseURLs(r *http.Request, projectUser, serverIP string) (string, string, error) {
+	if projectUser == "" {
+		return "", "", nil
+	}
+	appPath, err := devProxyAppPathFromQuery(r.URL.Query())
+	if err != nil {
+		return "", "", err
+	}
+	appQuery := cleanDevProxyQuery(r.URL.Query()).Encode()
+	rootURL := s.absoluteDevProxyURL(r, projectUser, serverIP)
+	if appPath == "" {
+		return rootURL, rootURL, nil
+	}
+
+	appURL := strings.TrimSuffix(rootURL, "/") + appPath
+	if appQuery != "" {
+		appURL += "?" + appQuery
+	}
+	return appURL, rootURL, nil
+}
+
+func devProxyAppPathFromQuery(values url.Values) (string, error) {
+	for _, key := range []string{"previewPath", "proxyPath"} {
+		if path := strings.TrimSpace(values.Get(key)); path != "" {
+			return normalizeDevProxyAppPath(path)
+		}
+	}
+
+	storeUUID := firstQueryValue(values, "storeUUID", "storeUuid", "store_uuid")
+	installationID := firstQueryValue(values, "installationID", "installationId", "installation_id")
+	if storeUUID == "" || installationID == "" {
+		return "", nil
+	}
+	return "/themes/" + url.PathEscape(storeUUID) + "/" + url.PathEscape(installationID), nil
+}
+
+func normalizeDevProxyAppPath(path string) (string, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "", nil
+	}
+	parsed, err := url.Parse(path)
+	if err != nil {
+		return "", err
+	}
+	if parsed.IsAbs() || parsed.Host != "" {
+		return "", config.ValidationError("preview path must be a relative URL path")
+	}
+
+	normalized := parsed.EscapedPath()
+	if normalized == "" {
+		normalized = path
+	}
+	if !strings.HasPrefix(normalized, "/") {
+		normalized = "/" + normalized
+	}
+	return normalized, nil
+}
+
+func firstQueryValue(values url.Values, keys ...string) string {
+	for _, key := range keys {
+		if value := strings.TrimSpace(values.Get(key)); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func (s *Server) absoluteDevProxyURL(r *http.Request, projectUser, serverIP string) string {

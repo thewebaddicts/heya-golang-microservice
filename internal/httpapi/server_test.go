@@ -217,6 +217,61 @@ func TestDevRunWebSocketResolvesProjectUser(t *testing.T) {
 	}
 }
 
+func TestDevRunWebSocketReturnsPreviewPathUnderProxy(t *testing.T) {
+	baseDir := t.TempDir()
+	projectDir := filepath.Join(baseDir, "account", "storage", "app", "frontend")
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatalf("create project dir: %v", err)
+	}
+
+	accountServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"account": map[string]any{
+				"id":            257,
+				"uuid":          "account-uuid",
+				"username":      "energy-user",
+				"label":         "Energy Bridge",
+				"port_dev_live": 12017,
+			},
+			"server_ip":              "91.98.82.198",
+			"working_directory":      filepath.Dir(filepath.Dir(filepath.Dir(projectDir))),
+			"working_directory_heya": projectDir,
+		})
+	}))
+	defer accountServer.Close()
+
+	runner := &fakeRunner{}
+	server := NewServer(config.Config{
+		ProjectBaseDir:     baseDir,
+		DefaultProjectDir:  projectDir,
+		DefaultDevPort:     3002,
+		DevIdleTimeout:     20 * time.Millisecond,
+		ProcessStopTimeout: time.Second,
+		AccountInfoURL:     accountServer.URL,
+		AccountInfoToken:   "test-token",
+		AccountInfoTimeout: time.Second,
+	}, runner, slog.Default())
+	testServer := httptest.NewServer(server.Routes())
+	defer testServer.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(testServer.URL, "http") + "/dev/run?projectUser=energy-user&previewPath=%2Fthemes%2F57726969-9e2e-11ed-9f8e-42010a960004%2Fz-6a1ef6c3dcca6&preview=true"
+	conn := dialWebSocket(t, wsURL)
+	defer conn.Close()
+	message := readWebSocketMessage(t, conn)
+
+	wantProxyRootURL := "https://91-98-82-198-heya-service.twalab.cloud/dev/proxy/energy-user/"
+	wantDevServerURL := wantProxyRootURL + "themes/57726969-9e2e-11ed-9f8e-42010a960004/z-6a1ef6c3dcca6?preview=true"
+	if message.DevServerURL != wantDevServerURL {
+		t.Fatalf("devServerURL = %q, want %q", message.DevServerURL, wantDevServerURL)
+	}
+	if message.DevProxyURL != wantProxyRootURL {
+		t.Fatalf("devProxyURL = %q, want %q", message.DevProxyURL, wantProxyRootURL)
+	}
+	if message.Run.DevServerURL != wantDevServerURL {
+		t.Fatalf("run DevServerURL = %q, want %q", message.Run.DevServerURL, wantDevServerURL)
+	}
+}
+
 func TestDevRunWebSocketAllowsConfiguredOrigin(t *testing.T) {
 	projectDir := t.TempDir()
 	runner := &fakeRunner{}
@@ -601,6 +656,22 @@ func TestDevProxyHostFromServerIP(t *testing.T) {
 	want := "91-98-82-198-heya-service.twalab.cloud"
 	if got != want {
 		t.Fatalf("devProxyHostFromServerIP() = %q, want %q", got, want)
+	}
+}
+
+func TestDevProxyAppPathFromStoreAndInstallation(t *testing.T) {
+	values := url.Values{
+		"storeUUID":      []string{"57726969-9e2e-11ed-9f8e-42010a960004"},
+		"installationID": []string{"z-6a1ef6c3dcca6"},
+	}
+
+	got, err := devProxyAppPathFromQuery(values)
+	if err != nil {
+		t.Fatalf("devProxyAppPathFromQuery() error = %v", err)
+	}
+	want := "/themes/57726969-9e2e-11ed-9f8e-42010a960004/z-6a1ef6c3dcca6"
+	if got != want {
+		t.Fatalf("devProxyAppPathFromQuery() = %q, want %q", got, want)
 	}
 }
 

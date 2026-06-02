@@ -55,6 +55,14 @@ Open a WebSocket connection:
 ws://localhost:8998/dev/run?projectUser=energybri_6a19492405faf
 ```
 
+To open a specific app route through the proxy, pass `previewPath`:
+
+```text
+ws://localhost:8998/dev/run?projectUser=energybri_6a19492405faf&previewPath=/themes/57726969-9e2e-11ed-9f8e-42010a960004/z-6a1ef6c3dcca6&preview=true
+```
+
+The service also accepts `storeUUID` plus `installationID` and builds the matching `/themes/{store uuid}/{installation id}` path.
+
 When `projectUser` is provided, the service first resolves the account through:
 
 ```text
@@ -83,7 +91,7 @@ After the dev server responds over HTTP, the service sends a JSON message contai
 {
   "type": "dev_server",
   "status": "running",
-  "devServerURL": "https://91-98-82-198-heya-service.twalab.cloud/dev/proxy/energybri_6a19492405faf/",
+  "devServerURL": "https://91-98-82-198-heya-service.twalab.cloud/dev/proxy/energybri_6a19492405faf/themes/57726969-9e2e-11ed-9f8e-42010a960004/z-6a1ef6c3dcca6?preview=true",
   "devProxyURL": "https://91-98-82-198-heya-service.twalab.cloud/dev/proxy/energybri_6a19492405faf/",
   "connections": 1
 }
