@@ -61,6 +61,8 @@ To open a specific app route through the proxy, pass `previewPath`:
 ws://localhost:8998/dev/run?projectUser=energybri_6a19492405faf&previewPath=/themes/57726969-9e2e-11ed-9f8e-42010a960004/z-6a1ef6c3dcca6&preview=true
 ```
 
+If the caller already has a full preview URL, pass it as `previewUrl`; the service rewrites its path under `/dev/proxy/<projectUser>/`.
+
 The service also accepts `storeUUID` plus `installationID` and builds the matching `/themes/{store uuid}/{installation id}` path.
 
 When `projectUser` is provided, the service first resolves the account through:

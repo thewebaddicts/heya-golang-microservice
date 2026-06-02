@@ -300,7 +300,7 @@ func cleanDevProxyQuery(values url.Values) url.Values {
 	cleaned := make(url.Values, len(values))
 	for key, value := range values {
 		switch key {
-		case "projectUser", "projectPath", "port", "previewPath", "proxyPath", "storeUUID", "storeUuid", "store_uuid", "installationID", "installationId", "installation_id":
+		case "projectUser", "projectPath", "port", "previewPath", "proxyPath", "previewUrl", "previewURL", "preview_url", "returnUrl", "returnURL", "return_url", "storeUUID", "storeUuid", "store_uuid", "installationID", "installationId", "installation_id":
 			continue
 		default:
 			cleaned[key] = append([]string(nil), value...)
@@ -335,11 +335,18 @@ func (s *Server) devProxyResponseURLs(r *http.Request, projectUser, serverIP str
 	if projectUser == "" {
 		return "", "", nil
 	}
-	appPath, err := devProxyAppPathFromQuery(r.URL.Query())
+	appPath, appQueryFromURL, err := devProxyAppPathFromQuery(r.URL.Query())
 	if err != nil {
 		return "", "", err
 	}
 	appQuery := cleanDevProxyQuery(r.URL.Query()).Encode()
+	if appQueryFromURL != "" {
+		if appQuery != "" {
+			appQuery = appQueryFromURL + "&" + appQuery
+		} else {
+			appQuery = appQueryFromURL
+		}
+	}
 	rootURL := s.absoluteDevProxyURL(r, projectUser, serverIP)
 	if appPath == "" {
 		return rootURL, rootURL, nil
@@ -352,32 +359,37 @@ func (s *Server) devProxyResponseURLs(r *http.Request, projectUser, serverIP str
 	return appURL, rootURL, nil
 }
 
-func devProxyAppPathFromQuery(values url.Values) (string, error) {
+func devProxyAppPathFromQuery(values url.Values) (string, string, error) {
 	for _, key := range []string{"previewPath", "proxyPath"} {
 		if path := strings.TrimSpace(values.Get(key)); path != "" {
 			return normalizeDevProxyAppPath(path)
+		}
+	}
+	for _, key := range []string{"previewUrl", "previewURL", "preview_url", "returnUrl", "returnURL", "return_url"} {
+		if rawURL := strings.TrimSpace(values.Get(key)); rawURL != "" {
+			return normalizeDevProxyAppURL(rawURL)
 		}
 	}
 
 	storeUUID := firstQueryValue(values, "storeUUID", "storeUuid", "store_uuid")
 	installationID := firstQueryValue(values, "installationID", "installationId", "installation_id")
 	if storeUUID == "" || installationID == "" {
-		return "", nil
+		return "", "", nil
 	}
-	return "/themes/" + url.PathEscape(storeUUID) + "/" + url.PathEscape(installationID), nil
+	return "/themes/" + url.PathEscape(storeUUID) + "/" + url.PathEscape(installationID), "", nil
 }
 
-func normalizeDevProxyAppPath(path string) (string, error) {
+func normalizeDevProxyAppPath(path string) (string, string, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
-		return "", nil
+		return "", "", nil
 	}
 	parsed, err := url.Parse(path)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	if parsed.IsAbs() || parsed.Host != "" {
-		return "", config.ValidationError("preview path must be a relative URL path")
+		return "", "", config.ValidationError("preview path must be a relative URL path")
 	}
 
 	normalized := parsed.EscapedPath()
@@ -387,7 +399,25 @@ func normalizeDevProxyAppPath(path string) (string, error) {
 	if !strings.HasPrefix(normalized, "/") {
 		normalized = "/" + normalized
 	}
-	return normalized, nil
+	return normalized, parsed.RawQuery, nil
+}
+
+func normalizeDevProxyAppURL(rawURL string) (string, string, error) {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return "", "", err
+	}
+	if parsed.Scheme == "" && parsed.Host == "" {
+		return normalizeDevProxyAppPath(rawURL)
+	}
+	if parsed.Path == "" {
+		return "", parsed.RawQuery, nil
+	}
+	path := parsed.EscapedPath()
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	return path, parsed.RawQuery, nil
 }
 
 func firstQueryValue(values url.Values, keys ...string) string {
