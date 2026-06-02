@@ -265,10 +265,11 @@ func (m *Manager) normalize(req RunRequest) (RunRequest, string, error) {
 	}
 
 	normalized := RunRequest{
-		ProjectPath:       projectDir,
-		Port:              port,
-		DevServerHost:     req.DevServerHost,
-		DevServerBasePath: req.DevServerBasePath,
+		ProjectPath:         projectDir,
+		Port:                port,
+		DevServerHost:       req.DevServerHost,
+		DevServerBasePath:   req.DevServerBasePath,
+		DevServerPublicHost: req.DevServerPublicHost,
 	}
 	key := fmt.Sprintf("%s:%d", projectDir, port)
 	return normalized, key, nil

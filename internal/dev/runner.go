@@ -21,10 +21,11 @@ import (
 )
 
 type RunRequest struct {
-	ProjectPath       string
-	Port              int
-	DevServerHost     string
-	DevServerBasePath string
+	ProjectPath         string
+	Port                int
+	DevServerHost       string
+	DevServerBasePath   string
+	DevServerPublicHost string
 }
 
 type RunResult struct {
@@ -87,7 +88,7 @@ func (r *LocalRunner) Run(ctx context.Context, req RunRequest) (RunResult, error
 	command := shellDevCommand(r.cfg.NPMBin, bindHost, basePath, port)
 	cmd := exec.Command(r.cfg.CommandShell, shellArgs(r.cfg.CommandShell, command)...)
 	cmd.Dir = projectDir
-	cmd.Env = shellEnvironment(os.Environ())
+	cmd.Env = devServerEnvironment(os.Environ(), req.DevServerPublicHost)
 	cmd.Stdout = logWriter
 	cmd.Stderr = logWriter
 	cmd.Stdin = nil
@@ -321,6 +322,26 @@ func shellArgs(shellPath, command string) []string {
 
 func shellEnvironment(env []string) []string {
 	return prependPath(env, "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin")
+}
+
+func devServerEnvironment(env []string, publicHost string) []string {
+	env = shellEnvironment(env)
+	publicHost = strings.TrimSpace(publicHost)
+	if publicHost == "" {
+		return env
+	}
+	return upsertEnv(env, "__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS", publicHost)
+}
+
+func upsertEnv(env []string, key, value string) []string {
+	prefix := key + "="
+	for i, entry := range env {
+		if strings.HasPrefix(entry, prefix) {
+			env[i] = prefix + value
+			return env
+		}
+	}
+	return append(env, prefix+value)
 }
 
 func prependPath(env []string, prefix string) []string {

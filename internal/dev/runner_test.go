@@ -55,6 +55,23 @@ func TestPrependPathUpdatesExistingPath(t *testing.T) {
 	}
 }
 
+func TestDevServerEnvironmentAddsViteAllowedHost(t *testing.T) {
+	got := devServerEnvironment([]string{"PATH=/usr/bin"}, "91-98-82-198-heya-service.twalab.cloud")
+	want := "__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS=91-98-82-198-heya-service.twalab.cloud"
+	if !containsEnv(got, want) {
+		t.Fatalf("environment does not contain %q: %#v", want, got)
+	}
+}
+
+func containsEnv(env []string, want string) bool {
+	for _, entry := range env {
+		if entry == want {
+			return true
+		}
+	}
+	return false
+}
+
 func TestParseProcessIDRejectsInvalidPID(t *testing.T) {
 	_, err := parseProcessID("123; rm -rf /")
 	if err == nil {

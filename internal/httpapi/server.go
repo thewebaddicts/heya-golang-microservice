@@ -99,6 +99,7 @@ func (s *Server) handleDevRunWebSocket(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		req.DevServerBasePath = proxyURLs.BasePath
+		req.DevServerPublicHost = hostFromAbsoluteURL(proxyURLs.RootURL)
 		if proxyURLs.IsTheme {
 			if err := s.ensureThemeProxyRouteAvailable(proxyURLs.BasePath, projectUser); err != nil {
 				writeError(w, http.StatusConflict, err.Error())
@@ -291,7 +292,7 @@ func (s *Server) proxyDevServer(w http.ResponseWriter, r *http.Request, req dev.
 		proxyReq.URL.Path = upstreamPath
 		proxyReq.URL.RawPath = ""
 		proxyReq.URL.RawQuery = upstreamQuery
-		proxyReq.Host = target.Host
+		proxyReq.Host = r.Host
 		proxyReq.Header.Set("X-Forwarded-Host", r.Host)
 		proxyReq.Header.Set("X-Forwarded-Proto", requestScheme(r))
 		if req.DevServerBasePath != "" {
@@ -593,6 +594,14 @@ func (s *Server) absoluteServiceURL(r *http.Request, serverIP, path string) stri
 		return "https://" + host + path
 	}
 	return requestScheme(r) + "://" + requestHost(r) + path
+}
+
+func hostFromAbsoluteURL(rawURL string) string {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return ""
+	}
+	return parsed.Hostname()
 }
 
 func devProxyHostFromServerIP(serverIP string) string {

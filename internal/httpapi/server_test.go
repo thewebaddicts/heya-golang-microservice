@@ -212,6 +212,9 @@ func TestDevRunWebSocketResolvesProjectUser(t *testing.T) {
 	if req.DevServerHost != "91.98.82.198" {
 		t.Fatalf("runner DevServerHost = %q, want 91.98.82.198", req.DevServerHost)
 	}
+	if req.DevServerPublicHost != "91-98-82-198-heya-service.twalab.cloud" {
+		t.Fatalf("runner DevServerPublicHost = %q, want dashed public host", req.DevServerPublicHost)
+	}
 	if req.DevServerBasePath != "/dev/proxy/energy-user/" {
 		t.Fatalf("runner DevServerBasePath = %q, want %q", req.DevServerBasePath, "/dev/proxy/energy-user/")
 	}
@@ -502,9 +505,11 @@ func TestThemeProxyProxiesRegisteredRouteToLocalDevServer(t *testing.T) {
 
 	var upstreamPath string
 	var upstreamQuery string
+	var upstreamHost string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		upstreamPath = r.URL.Path
 		upstreamQuery = r.URL.RawQuery
+		upstreamHost = r.Host
 		w.Header().Set("X-Upstream", "vite")
 		_, _ = w.Write([]byte("proxied theme dev server"))
 	}))
@@ -550,7 +555,13 @@ func TestThemeProxyProxiesRegisteredRouteToLocalDevServer(t *testing.T) {
 		t.Fatalf("devProxyURL = %q, want route-native theme root", message.DevProxyURL)
 	}
 
-	resp, err := http.Get(testServer.URL + "/themes/57726969-9e2e-11ed-9f8e-42010a960004/z-6a1ef6c3dcca6/@vite/client?foo=bar")
+	reqHTTP, err := http.NewRequest(http.MethodGet, testServer.URL+"/themes/57726969-9e2e-11ed-9f8e-42010a960004/z-6a1ef6c3dcca6/@vite/client?foo=bar", nil)
+	if err != nil {
+		t.Fatalf("create theme proxy request: %v", err)
+	}
+	reqHTTP.Host = "91-98-82-198-heya-service.twalab.cloud"
+
+	resp, err := http.DefaultClient.Do(reqHTTP)
 	if err != nil {
 		t.Fatalf("GET theme proxy: %v", err)
 	}
@@ -574,6 +585,9 @@ func TestThemeProxyProxiesRegisteredRouteToLocalDevServer(t *testing.T) {
 	}
 	if upstreamQuery != "foo=bar" {
 		t.Fatalf("upstream query = %q, want %q", upstreamQuery, "foo=bar")
+	}
+	if upstreamHost != "91-98-82-198-heya-service.twalab.cloud" {
+		t.Fatalf("upstream host = %q, want public proxy host", upstreamHost)
 	}
 
 	req := runner.lastRequest()
