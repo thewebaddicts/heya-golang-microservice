@@ -61,7 +61,7 @@ To open a specific app route through the proxy, pass `previewPath`:
 ws://localhost:8998/dev/run?projectUser=energybri_6a19492405faf&previewPath=/themes/57726969-9e2e-11ed-9f8e-42010a960004/z-6a1ef6c3dcca6&preview=true
 ```
 
-If the caller already has a full preview URL, pass it as `previewUrl`; the service rewrites its path under `/dev/proxy/<projectUser>/`.
+If the caller already has a full preview URL, pass it as `previewUrl`. The service also accepts `pageUrl` when the browser already knows the current admin page URL.
 
 The service also accepts `storeUUID` plus `installationID` and builds the matching `/themes/{store uuid}/{installation id}` path.
 
@@ -84,7 +84,7 @@ ws://localhost:8998/dev/run?projectPath=/Library/WebServer/Documents/abc/storage
 When the first connection opens, the service runs this command locally from the resolved project directory:
 
 ```bash
-npm run dev -- --port <account.port_dev_live>
+npm run dev -- --host 0.0.0.0 --port <account.port_dev_live> --base <proxy base path>
 ```
 
 After the dev server responds over HTTP, the service sends a JSON message containing the dev server URL, current connection count, local PID, and log file path:
@@ -93,8 +93,8 @@ After the dev server responds over HTTP, the service sends a JSON message contai
 {
   "type": "dev_server",
   "status": "running",
-  "devServerURL": "https://91-98-82-198-heya-service.twalab.cloud/dev/proxy/energybri_6a19492405faf/themes/57726969-9e2e-11ed-9f8e-42010a960004/z-6a1ef6c3dcca6?preview=true",
-  "devProxyURL": "https://91-98-82-198-heya-service.twalab.cloud/dev/proxy/energybri_6a19492405faf/",
+  "devServerURL": "https://91-98-82-198-heya-service.twalab.cloud/themes/57726969-9e2e-11ed-9f8e-42010a960004/z-6a1ef6c3dcca6/themes/57726969-9e2e-11ed-9f8e-42010a960004/z-6a1ef6c3dcca6?preview=true",
+  "devProxyURL": "https://91-98-82-198-heya-service.twalab.cloud/themes/57726969-9e2e-11ed-9f8e-42010a960004/z-6a1ef6c3dcca6/",
   "connections": 1
 }
 ```
@@ -103,7 +103,34 @@ Additional WebSocket connections for the same `projectPath` and `port` increment
 
 ## Dev Server Proxy
 
-The microservice can expose many local Vite dev servers through one public HTTP(S) entrypoint instead of opening each dev-server port. Use the project-scoped proxy URL:
+The microservice can expose many local Vite dev servers through one public HTTP(S) entrypoint instead of opening each dev-server port. When `/dev/run` receives theme context, the service uses a route-native proxy URL:
+
+```text
+https://<service-host>/themes/<storeUUID>/<installationID>/...
+```
+
+For example, a dev server on local port `12036` can be exposed as:
+
+```text
+https://91-98-82-198-heya-service.twalab.cloud/themes/57726969-9e2e-11ed-9f8e-42010a960004/z-6a1ef6c3dcca6/
+```
+
+The proxy registers that theme base path to the resolved `projectUser` and forwards requests internally to `HEYA_DEV_READY_HOST:<account.port_dev_live>`. Vite starts with the same base path, such as:
+
+```bash
+npm run dev -- --host 0.0.0.0 --port 12036 --base /themes/57726969-9e2e-11ed-9f8e-42010a960004/z-6a1ef6c3dcca6/
+```
+
+Multiple projects on the same server are separated by path, not public port:
+
+```text
+/themes/store-a/install-a/ -> http://localhost:12036
+/themes/store-b/install-b/ -> http://localhost:12037
+```
+
+The same theme base path cannot be assigned to a different `projectUser` while it is already registered.
+
+If no theme context is provided, the project-scoped proxy URL remains available as a fallback:
 
 ```text
 https://<service-host>/dev/proxy/<projectUser>/

@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -21,20 +22,35 @@ import (
 )
 
 type Server struct {
-	cfg          config.Config
-	manager      *dev.Manager
-	buildManager *buildrun.Manager
-	accounts     *account.Resolver
-	logger       *slog.Logger
+	cfg              config.Config
+	manager          *dev.Manager
+	buildManager     *buildrun.Manager
+	accounts         *account.Resolver
+	logger           *slog.Logger
+	themeProxyMu     sync.RWMutex
+	themeProxyRoutes map[string]themeProxyRoute
+}
+
+type themeProxyRoute struct {
+	ProjectUser string
+	Request     dev.RunRequest
+}
+
+type devRunProxyURLs struct {
+	AppURL   string
+	RootURL  string
+	BasePath string
+	IsTheme  bool
 }
 
 func NewServer(cfg config.Config, runner dev.Runner, logger *slog.Logger) *Server {
 	return &Server{
-		cfg:          cfg,
-		manager:      dev.NewManager(cfg, runner, logger),
-		buildManager: buildrun.NewManager(cfg, buildrun.NewRunner(cfg), logger),
-		accounts:     account.NewResolver(cfg, logger),
-		logger:       logger,
+		cfg:              cfg,
+		manager:          dev.NewManager(cfg, runner, logger),
+		buildManager:     buildrun.NewManager(cfg, buildrun.NewRunner(cfg), logger),
+		accounts:         account.NewResolver(cfg, logger),
+		logger:           logger,
+		themeProxyRoutes: make(map[string]themeProxyRoute),
 	}
 }
 
@@ -45,6 +61,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /build/run", s.handleBuildRunWebSocket)
 	mux.HandleFunc("/dev/proxy", s.handleDevProxy)
 	mux.HandleFunc("/dev/proxy/", s.handleDevProxy)
+	mux.HandleFunc("/themes/", s.handleThemeProxy)
 	return mux
 }
 
@@ -69,13 +86,25 @@ func (s *Server) handleDevRunWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 
 	projectUser := strings.TrimSpace(r.URL.Query().Get("projectUser"))
+	var proxyURLs devRunProxyURLs
 	if projectUser != "" {
 		if err := s.resolveDevProjectUser(r.Context(), projectUser, &req); err != nil {
 			s.logger.Error("failed to resolve dev project user", "projectUser", projectUser, "error", err)
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		req.DevServerBasePath = devProxyBasePath(projectUser)
+		proxyURLs, err = s.devRunProxyURLs(r, projectUser, req.DevServerHost)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		req.DevServerBasePath = proxyURLs.BasePath
+		if proxyURLs.IsTheme {
+			if err := s.ensureThemeProxyRouteAvailable(proxyURLs.BasePath, projectUser); err != nil {
+				writeError(w, http.StatusConflict, err.Error())
+				return
+			}
+		}
 		s.logger.Info("resolved dev run project user",
 			"projectUser", projectUser,
 			"projectPath", req.ProjectPath,
@@ -117,14 +146,24 @@ func (s *Server) handleDevRunWebSocket(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	proxyAppURL, proxyRootURL, err := s.devProxyResponseURLs(r, projectUser, req.DevServerHost)
-	if err != nil {
+	if projectUser != "" && req.DevServerBasePath != "" && lease.Result.DevServerBasePath != req.DevServerBasePath {
 		_ = conn.WriteJSON(map[string]string{
 			"type":   "error",
 			"status": "failed",
-			"error":  err.Error(),
+			"error":  "dev server is already running with base path " + lease.Result.DevServerBasePath + "; requested " + req.DevServerBasePath,
 		})
 		return
+	}
+
+	if projectUser != "" && proxyURLs.IsTheme {
+		if err := s.registerThemeProxyRoute(proxyURLs.BasePath, projectUser, req); err != nil {
+			_ = conn.WriteJSON(map[string]string{
+				"type":   "error",
+				"status": "failed",
+				"error":  err.Error(),
+			})
+			return
+		}
 	}
 
 	payload := map[string]any{
@@ -137,9 +176,9 @@ func (s *Server) handleDevRunWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 	if projectUser != "" {
 		run := lease.Result
-		run.DevServerURL = proxyAppURL
-		payload["devServerURL"] = proxyAppURL
-		payload["devProxyURL"] = proxyRootURL
+		run.DevServerURL = proxyURLs.AppURL
+		payload["devServerURL"] = proxyURLs.AppURL
+		payload["devProxyURL"] = proxyURLs.RootURL
 		payload["run"] = run
 	}
 	if err := conn.WriteJSON(payload); err != nil {
@@ -200,6 +239,33 @@ func (s *Server) handleDevProxy(w http.ResponseWriter, r *http.Request) {
 		"upstreamPath", upstreamPath,
 	)
 
+	s.proxyDevServer(w, r, req, projectUser, upstreamPath, upstreamQuery)
+}
+
+func (s *Server) handleThemeProxy(w http.ResponseWriter, r *http.Request) {
+	if websocket.IsWebSocketUpgrade(r) && !s.isAllowedWebSocketOrigin(r) {
+		writeError(w, http.StatusForbidden, "websocket origin is not allowed")
+		return
+	}
+
+	route, basePath, ok := s.themeProxyRouteForPath(r.URL.EscapedPath())
+	if !ok {
+		writeError(w, http.StatusNotFound, "theme proxy route is not registered")
+		return
+	}
+
+	s.logger.Info("received theme proxy request",
+		"projectUser", route.ProjectUser,
+		"projectPath", route.Request.ProjectPath,
+		"port", route.Request.Port,
+		"basePath", basePath,
+		"upstreamPath", r.URL.Path,
+	)
+
+	s.proxyDevServer(w, r, route.Request, route.ProjectUser, r.URL.Path, r.URL.RawQuery)
+}
+
+func (s *Server) proxyDevServer(w http.ResponseWriter, r *http.Request, req dev.RunRequest, projectUser, upstreamPath, upstreamQuery string) {
 	lease, err := s.manager.Acquire(r.Context(), req)
 	if err != nil {
 		s.logger.Error("failed to start dev server for proxy", "projectUser", projectUser, "error", err)
@@ -300,7 +366,7 @@ func cleanDevProxyQuery(values url.Values) url.Values {
 	cleaned := make(url.Values, len(values))
 	for key, value := range values {
 		switch key {
-		case "projectUser", "projectPath", "port", "previewPath", "proxyPath", "previewUrl", "previewURL", "preview_url", "returnUrl", "returnURL", "return_url", "storeUUID", "storeUuid", "store_uuid", "installationID", "installationId", "installation_id":
+		case "projectUser", "projectPath", "port", "previewPath", "proxyPath", "previewUrl", "previewURL", "preview_url", "returnUrl", "returnURL", "return_url", "pageUrl", "pageURL", "page_url", "storeUUID", "storeUuid", "store_uuid", "installationID", "installationId", "installation_id":
 			continue
 		default:
 			cleaned[key] = append([]string(nil), value...)
@@ -331,13 +397,65 @@ func devProxyBasePath(projectUser string) string {
 	return "/dev/proxy/" + url.PathEscape(projectUser) + "/"
 }
 
-func (s *Server) devProxyResponseURLs(r *http.Request, projectUser, serverIP string) (string, string, error) {
+func themeProxyBasePath(appPath string) (string, bool) {
+	appPath = strings.TrimSpace(appPath)
+	if appPath == "" {
+		return "", false
+	}
+	if !strings.HasPrefix(appPath, "/") {
+		appPath = "/" + appPath
+	}
+	parts := strings.Split(strings.Trim(appPath, "/"), "/")
+	if len(parts) < 3 || parts[0] != "themes" {
+		return "", false
+	}
+	return "/themes/" + parts[1] + "/" + parts[2] + "/", true
+}
+
+func (s *Server) ensureThemeProxyRouteAvailable(basePath, projectUser string) error {
+	s.themeProxyMu.RLock()
+	route, ok := s.themeProxyRoutes[basePath]
+	s.themeProxyMu.RUnlock()
+	if !ok || route.ProjectUser == projectUser {
+		return nil
+	}
+	return config.ValidationError("theme proxy path " + basePath + " is already assigned to projectUser " + route.ProjectUser)
+}
+
+func (s *Server) registerThemeProxyRoute(basePath, projectUser string, req dev.RunRequest) error {
+	s.themeProxyMu.Lock()
+	defer s.themeProxyMu.Unlock()
+
+	route, ok := s.themeProxyRoutes[basePath]
+	if ok && route.ProjectUser != projectUser {
+		return config.ValidationError("theme proxy path " + basePath + " is already assigned to projectUser " + route.ProjectUser)
+	}
+	s.themeProxyRoutes[basePath] = themeProxyRoute{
+		ProjectUser: projectUser,
+		Request:     req,
+	}
+	return nil
+}
+
+func (s *Server) themeProxyRouteForPath(requestPath string) (themeProxyRoute, string, bool) {
+	basePath, ok := themeProxyBasePath(requestPath)
+	if !ok {
+		return themeProxyRoute{}, "", false
+	}
+
+	s.themeProxyMu.RLock()
+	route, ok := s.themeProxyRoutes[basePath]
+	s.themeProxyMu.RUnlock()
+	return route, basePath, ok
+}
+
+func (s *Server) devRunProxyURLs(r *http.Request, projectUser, serverIP string) (devRunProxyURLs, error) {
 	if projectUser == "" {
-		return "", "", nil
+		return devRunProxyURLs{}, nil
 	}
 	appPath, appQueryFromURL, err := devProxyAppPathFromQuery(r.URL.Query())
 	if err != nil {
-		return "", "", err
+		return devRunProxyURLs{}, err
 	}
 	appQuery := cleanDevProxyQuery(r.URL.Query()).Encode()
 	if appQueryFromURL != "" {
@@ -347,16 +465,33 @@ func (s *Server) devProxyResponseURLs(r *http.Request, projectUser, serverIP str
 			appQuery = appQueryFromURL
 		}
 	}
-	rootURL := s.absoluteDevProxyURL(r, projectUser, serverIP)
+	basePath := devProxyBasePath(projectUser)
+	isTheme := false
+	if themeBasePath, ok := themeProxyBasePath(appPath); ok {
+		basePath = themeBasePath
+		isTheme = true
+	}
+
+	rootURL := s.absoluteServiceURL(r, serverIP, basePath)
 	if appPath == "" {
-		return rootURL, rootURL, nil
+		return devRunProxyURLs{
+			AppURL:   rootURL,
+			RootURL:  rootURL,
+			BasePath: basePath,
+			IsTheme:  isTheme,
+		}, nil
 	}
 
 	appURL := strings.TrimSuffix(rootURL, "/") + appPath
 	if appQuery != "" {
 		appURL += "?" + appQuery
 	}
-	return appURL, rootURL, nil
+	return devRunProxyURLs{
+		AppURL:   appURL,
+		RootURL:  rootURL,
+		BasePath: basePath,
+		IsTheme:  isTheme,
+	}, nil
 }
 
 func devProxyAppPathFromQuery(values url.Values) (string, string, error) {
@@ -365,7 +500,7 @@ func devProxyAppPathFromQuery(values url.Values) (string, string, error) {
 			return normalizeDevProxyAppPath(path)
 		}
 	}
-	for _, key := range []string{"previewUrl", "previewURL", "preview_url", "returnUrl", "returnURL", "return_url"} {
+	for _, key := range []string{"previewUrl", "previewURL", "preview_url", "returnUrl", "returnURL", "return_url", "pageUrl", "pageURL", "page_url"} {
 		if rawURL := strings.TrimSpace(values.Get(key)); rawURL != "" {
 			return normalizeDevProxyAppURL(rawURL)
 		}
@@ -429,11 +564,14 @@ func firstQueryValue(values url.Values, keys ...string) string {
 	return ""
 }
 
-func (s *Server) absoluteDevProxyURL(r *http.Request, projectUser, serverIP string) string {
-	if host := devProxyHostFromServerIP(serverIP); host != "" {
-		return "https://" + host + devProxyBasePath(projectUser)
+func (s *Server) absoluteServiceURL(r *http.Request, serverIP, path string) string {
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
 	}
-	return requestScheme(r) + "://" + requestHost(r) + devProxyBasePath(projectUser)
+	if host := devProxyHostFromServerIP(serverIP); host != "" {
+		return "https://" + host + path
+	}
+	return requestScheme(r) + "://" + requestHost(r) + path
 }
 
 func devProxyHostFromServerIP(serverIP string) string {

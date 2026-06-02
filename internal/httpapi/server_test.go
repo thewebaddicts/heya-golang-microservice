@@ -259,7 +259,7 @@ func TestDevRunWebSocketReturnsPreviewPathUnderProxy(t *testing.T) {
 	defer conn.Close()
 	message := readWebSocketMessage(t, conn)
 
-	wantProxyRootURL := "https://91-98-82-198-heya-service.twalab.cloud/dev/proxy/energy-user/"
+	wantProxyRootURL := "https://91-98-82-198-heya-service.twalab.cloud/themes/57726969-9e2e-11ed-9f8e-42010a960004/z-6a1ef6c3dcca6/"
 	wantDevServerURL := wantProxyRootURL + "themes/57726969-9e2e-11ed-9f8e-42010a960004/z-6a1ef6c3dcca6?preview=true"
 	if message.DevServerURL != wantDevServerURL {
 		t.Fatalf("devServerURL = %q, want %q", message.DevServerURL, wantDevServerURL)
@@ -269,6 +269,9 @@ func TestDevRunWebSocketReturnsPreviewPathUnderProxy(t *testing.T) {
 	}
 	if message.Run.DevServerURL != wantDevServerURL {
 		t.Fatalf("run DevServerURL = %q, want %q", message.Run.DevServerURL, wantDevServerURL)
+	}
+	if message.Run.DevServerBasePath != "/themes/57726969-9e2e-11ed-9f8e-42010a960004/z-6a1ef6c3dcca6/" {
+		t.Fatalf("run DevServerBasePath = %q, want theme base path", message.Run.DevServerBasePath)
 	}
 }
 
@@ -315,12 +318,12 @@ func TestDevRunWebSocketRewritesPreviewURLUnderProxy(t *testing.T) {
 	defer conn.Close()
 	message := readWebSocketMessage(t, conn)
 
-	wantDevServerURL := "https://91-98-82-198-heya-service.twalab.cloud/dev/proxy/energy-user/themes/57726969-9e2e-11ed-9f8e-42010a960004/z-6a1ef6c3dcca6?preview=true"
+	wantDevServerURL := "https://91-98-82-198-heya-service.twalab.cloud/themes/57726969-9e2e-11ed-9f8e-42010a960004/z-6a1ef6c3dcca6/themes/57726969-9e2e-11ed-9f8e-42010a960004/z-6a1ef6c3dcca6?preview=true"
 	if message.DevServerURL != wantDevServerURL {
 		t.Fatalf("devServerURL = %q, want %q", message.DevServerURL, wantDevServerURL)
 	}
-	if !strings.Contains(message.DevServerURL, "/dev/proxy/energy-user/themes/") {
-		t.Fatalf("devServerURL = %q, want proxy-prefixed themes URL", message.DevServerURL)
+	if !strings.Contains(message.DevServerURL, "/themes/57726969-9e2e-11ed-9f8e-42010a960004/z-6a1ef6c3dcca6/themes/") {
+		t.Fatalf("devServerURL = %q, want route-native themes URL", message.DevServerURL)
 	}
 }
 
@@ -433,6 +436,166 @@ func TestDevProxyProxiesProjectUserToLocalDevServer(t *testing.T) {
 	}
 	if req.DevServerBasePath != "/dev/proxy/energy-user/" {
 		t.Fatalf("runner DevServerBasePath = %q, want %q", req.DevServerBasePath, "/dev/proxy/energy-user/")
+	}
+}
+
+func TestThemeProxyProxiesRegisteredRouteToLocalDevServer(t *testing.T) {
+	baseDir := t.TempDir()
+	projectDir := filepath.Join(baseDir, "account", "storage", "app", "frontend")
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatalf("create project dir: %v", err)
+	}
+
+	var upstreamPath string
+	var upstreamQuery string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamPath = r.URL.Path
+		upstreamQuery = r.URL.RawQuery
+		w.Header().Set("X-Upstream", "vite")
+		_, _ = w.Write([]byte("proxied theme dev server"))
+	}))
+	defer upstream.Close()
+	upstreamPort := serverPort(t, upstream.URL)
+
+	accountServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"account": map[string]any{
+				"id":            257,
+				"uuid":          "account-uuid",
+				"username":      "energy-user",
+				"label":         "Energy Bridge",
+				"port_dev_live": upstreamPort,
+			},
+			"server_ip":              "91.98.82.198",
+			"working_directory":      filepath.Dir(filepath.Dir(filepath.Dir(projectDir))),
+			"working_directory_heya": projectDir,
+		})
+	}))
+	defer accountServer.Close()
+
+	runner := &fakeRunner{}
+	server := NewServer(config.Config{
+		ProjectBaseDir:     baseDir,
+		DefaultProjectDir:  projectDir,
+		DefaultDevPort:     3002,
+		DevReadyHost:       "127.0.0.1",
+		DevIdleTimeout:     time.Second,
+		ProcessStopTimeout: time.Second,
+		AccountInfoURL:     accountServer.URL,
+		AccountInfoToken:   "test-token",
+		AccountInfoTimeout: time.Second,
+	}, runner, slog.Default())
+	testServer := httptest.NewServer(server.Routes())
+	defer testServer.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(testServer.URL, "http") + "/dev/run?projectUser=energy-user&previewPath=%2Fthemes%2F57726969-9e2e-11ed-9f8e-42010a960004%2Fz-6a1ef6c3dcca6&preview=true"
+	conn := dialWebSocket(t, wsURL)
+	defer conn.Close()
+	message := readWebSocketMessage(t, conn)
+	if message.DevProxyURL != "https://91-98-82-198-heya-service.twalab.cloud/themes/57726969-9e2e-11ed-9f8e-42010a960004/z-6a1ef6c3dcca6/" {
+		t.Fatalf("devProxyURL = %q, want route-native theme root", message.DevProxyURL)
+	}
+
+	resp, err := http.Get(testServer.URL + "/themes/57726969-9e2e-11ed-9f8e-42010a960004/z-6a1ef6c3dcca6/@vite/client?foo=bar")
+	if err != nil {
+		t.Fatalf("GET theme proxy: %v", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read response body: %v", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", resp.StatusCode, http.StatusOK, string(body))
+	}
+	if string(body) != "proxied theme dev server" {
+		t.Fatalf("body = %q, want proxied theme dev server", string(body))
+	}
+	if resp.Header.Get("X-Upstream") != "vite" {
+		t.Fatalf("X-Upstream = %q, want vite", resp.Header.Get("X-Upstream"))
+	}
+	if upstreamPath != "/themes/57726969-9e2e-11ed-9f8e-42010a960004/z-6a1ef6c3dcca6/@vite/client" {
+		t.Fatalf("upstream path = %q, want original theme path", upstreamPath)
+	}
+	if upstreamQuery != "foo=bar" {
+		t.Fatalf("upstream query = %q, want %q", upstreamQuery, "foo=bar")
+	}
+
+	req := runner.lastRequest()
+	if req.DevServerBasePath != "/themes/57726969-9e2e-11ed-9f8e-42010a960004/z-6a1ef6c3dcca6/" {
+		t.Fatalf("runner DevServerBasePath = %q, want theme base path", req.DevServerBasePath)
+	}
+}
+
+func TestDevRunWebSocketRejectsThemeProxyConflict(t *testing.T) {
+	baseDir := t.TempDir()
+	projectDirOne := filepath.Join(baseDir, "account-one", "storage", "app", "frontend")
+	projectDirTwo := filepath.Join(baseDir, "account-two", "storage", "app", "frontend")
+	for _, projectDir := range []string{projectDirOne, projectDirTwo} {
+		if err := os.MkdirAll(projectDir, 0o755); err != nil {
+			t.Fatalf("create project dir: %v", err)
+		}
+	}
+
+	accountServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]string
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+
+		projectDir := projectDirOne
+		port := 12017
+		if payload["account"] == "other-user" {
+			projectDir = projectDirTwo
+			port = 12018
+		}
+
+		writeJSON(w, http.StatusOK, map[string]any{
+			"account": map[string]any{
+				"id":            257,
+				"uuid":          "account-uuid",
+				"username":      payload["account"],
+				"label":         "Energy Bridge",
+				"port_dev_live": port,
+			},
+			"server_ip":              "91.98.82.198",
+			"working_directory":      filepath.Dir(filepath.Dir(filepath.Dir(projectDir))),
+			"working_directory_heya": projectDir,
+		})
+	}))
+	defer accountServer.Close()
+
+	runner := &fakeRunner{}
+	server := NewServer(config.Config{
+		ProjectBaseDir:     baseDir,
+		DefaultProjectDir:  projectDirOne,
+		DefaultDevPort:     3002,
+		DevIdleTimeout:     time.Second,
+		ProcessStopTimeout: time.Second,
+		AccountInfoURL:     accountServer.URL,
+		AccountInfoToken:   "test-token",
+		AccountInfoTimeout: time.Second,
+	}, runner, slog.Default())
+	testServer := httptest.NewServer(server.Routes())
+	defer testServer.Close()
+
+	previewPath := "%2Fthemes%2F57726969-9e2e-11ed-9f8e-42010a960004%2Fz-6a1ef6c3dcca6"
+	first := dialWebSocket(t, "ws"+strings.TrimPrefix(testServer.URL, "http")+"/dev/run?projectUser=energy-user&previewPath="+previewPath)
+	defer first.Close()
+	_ = readWebSocketMessage(t, first)
+
+	secondURL := "ws" + strings.TrimPrefix(testServer.URL, "http") + "/dev/run?projectUser=other-user&previewPath=" + previewPath
+	second, resp, err := websocket.DefaultDialer.Dial(secondURL, nil)
+	if err == nil {
+		second.Close()
+		t.Fatal("second Dial() succeeded, want theme proxy conflict")
+	}
+	if resp == nil {
+		t.Fatal("second Dial() response is nil, want HTTP conflict")
+	}
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("second Dial() status = %d, want %d", resp.StatusCode, http.StatusConflict)
 	}
 }
 
@@ -745,6 +908,24 @@ func TestDevProxyAppPathFromPreviewURL(t *testing.T) {
 	}
 	if query != "preview=true" {
 		t.Fatalf("query = %q, want preview=true", query)
+	}
+}
+
+func TestDevProxyAppPathFromPageURL(t *testing.T) {
+	values := url.Values{
+		"pageUrl": []string{"https://admin.thewebaddicts.com/themes/57726969-9e2e-11ed-9f8e-42010a960004/z-6a1ef6c3dcca6?path=%2F"},
+	}
+
+	got, query, err := devProxyAppPathFromQuery(values)
+	if err != nil {
+		t.Fatalf("devProxyAppPathFromQuery() error = %v", err)
+	}
+	want := "/themes/57726969-9e2e-11ed-9f8e-42010a960004/z-6a1ef6c3dcca6"
+	if got != want {
+		t.Fatalf("devProxyAppPathFromQuery() = %q, want %q", got, want)
+	}
+	if query != "path=%2F" {
+		t.Fatalf("query = %q, want path=%%2F", query)
 	}
 }
 
