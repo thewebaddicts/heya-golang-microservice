@@ -21,20 +21,22 @@ import (
 )
 
 type RunRequest struct {
-	ProjectPath   string
-	Port          int
-	DevServerHost string
+	ProjectPath       string
+	Port              int
+	DevServerHost     string
+	DevServerBasePath string
 }
 
 type RunResult struct {
-	ProjectPath  string    `json:"projectPath"`
-	Port         int       `json:"port"`
-	DevServerURL string    `json:"devServerURL"`
-	PID          string    `json:"pid"`
-	LogFile      string    `json:"logFile"`
-	Command      string    `json:"command"`
-	Target       string    `json:"target"`
-	StartedAt    time.Time `json:"startedAt"`
+	ProjectPath       string    `json:"projectPath"`
+	Port              int       `json:"port"`
+	DevServerURL      string    `json:"devServerURL"`
+	DevServerBasePath string    `json:"devServerBasePath,omitempty"`
+	PID               string    `json:"pid"`
+	LogFile           string    `json:"logFile"`
+	Command           string    `json:"command"`
+	Target            string    `json:"target"`
+	StartedAt         time.Time `json:"startedAt"`
 }
 
 type Runner interface {
@@ -81,7 +83,8 @@ func (r *LocalRunner) Run(ctx context.Context, req RunRequest) (RunResult, error
 	defer logWriter.Close()
 
 	bindHost := r.devServerBindHost()
-	command := shellDevCommand(r.cfg.NPMBin, bindHost, port)
+	basePath := normalizeDevServerBasePath(req.DevServerBasePath)
+	command := shellDevCommand(r.cfg.NPMBin, bindHost, basePath, port)
 	cmd := exec.Command(r.cfg.CommandShell, shellArgs(r.cfg.CommandShell, command)...)
 	cmd.Dir = projectDir
 	cmd.Env = shellEnvironment(os.Environ())
@@ -106,14 +109,15 @@ func (r *LocalRunner) Run(ctx context.Context, req RunRequest) (RunResult, error
 	}()
 
 	result := RunResult{
-		ProjectPath:  projectDir,
-		Port:         port,
-		DevServerURL: r.devServerURL(port, req.DevServerHost),
-		PID:          strconv.Itoa(cmd.Process.Pid),
-		LogFile:      logFile,
-		Command:      command,
-		Target:       "local",
-		StartedAt:    startedAt,
+		ProjectPath:       projectDir,
+		Port:              port,
+		DevServerURL:      r.devServerURL(port, req.DevServerHost),
+		DevServerBasePath: basePath,
+		PID:               strconv.Itoa(cmd.Process.Pid),
+		LogFile:           logFile,
+		Command:           command,
+		Target:            "local",
+		StartedAt:         startedAt,
 	}
 	readyURL := r.devReadyURL(port)
 	localURL := r.devLocalURL(port)
@@ -126,6 +130,7 @@ func (r *LocalRunner) Run(ctx context.Context, req RunRequest) (RunResult, error
 		"target", result.Target,
 		"logFile", result.LogFile,
 		"command", result.Command,
+		"basePath", result.DevServerBasePath,
 		"localURL", localURL,
 		"bindURL", bindURL,
 		"devServerURL", result.DevServerURL,
@@ -192,6 +197,20 @@ func (r *LocalRunner) devServerBindHost() string {
 
 func serverURL(scheme, host string, port int) string {
 	return fmt.Sprintf("%s://%s", scheme, net.JoinHostPort(host, strconv.Itoa(port)))
+}
+
+func normalizeDevServerBasePath(basePath string) string {
+	basePath = strings.TrimSpace(basePath)
+	if basePath == "" || basePath == "/" {
+		return ""
+	}
+	if !strings.HasPrefix(basePath, "/") {
+		basePath = "/" + basePath
+	}
+	if !strings.HasSuffix(basePath, "/") {
+		basePath += "/"
+	}
+	return basePath
 }
 
 func (r *LocalRunner) waitUntilReady(ctx context.Context, url string, exited <-chan error) error {
@@ -274,7 +293,7 @@ func validateProjectDir(projectDir string) error {
 	return nil
 }
 
-func shellDevCommand(npmBin, bindHost string, port int) string {
+func shellDevCommand(npmBin, bindHost, basePath string, port int) string {
 	npmBin = strings.TrimSpace(npmBin)
 	if npmBin == "" {
 		npmBin = "npm"
@@ -283,7 +302,12 @@ func shellDevCommand(npmBin, bindHost string, port int) string {
 	if bindHost == "" {
 		bindHost = "0.0.0.0"
 	}
-	return shellQuote(npmBin) + " run dev -- --host " + shellQuote(bindHost) + " --port " + strconv.Itoa(port)
+	command := shellQuote(npmBin) + " run dev -- --host " + shellQuote(bindHost) + " --port " + strconv.Itoa(port)
+	basePath = normalizeDevServerBasePath(basePath)
+	if basePath != "" {
+		command += " --base " + shellQuote(basePath)
+	}
+	return command
 }
 
 func shellArgs(shellPath, command string) []string {

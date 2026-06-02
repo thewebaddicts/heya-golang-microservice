@@ -90,6 +90,22 @@ After the dev server responds over HTTP, the service sends a JSON message contai
 
 Additional WebSocket connections for the same `projectPath` and `port` increment an internal count and reuse the running dev server. When the last connection disconnects, the service stops the local process group.
 
+## Dev Server Proxy
+
+The microservice can expose many local Vite dev servers through one public HTTP(S) entrypoint instead of opening each dev-server port. Use the project-scoped proxy URL:
+
+```text
+https://<service-host>/dev/proxy/<projectUser>/
+```
+
+For example:
+
+```text
+https://91-98-82-198-heya-service.twalab.cloud/dev/proxy/heyasite_6a1ef2a3528e1/
+```
+
+The proxy resolves `projectUser`, starts or reuses the local dev server on the account's assigned port, and forwards requests internally to `HEYA_DEV_READY_HOST:<port>` without requiring that port to be public. Project-user dev runs start Vite with a matching base path such as `--base /dev/proxy/heyasite_6a1ef2a3528e1/` so Vite asset and HMR paths stay under the proxy prefix.
+
 ## Build API
 
 Open a WebSocket connection:

@@ -4,11 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -45,14 +49,15 @@ func (r *fakeRunner) Run(_ context.Context, req dev.RunRequest) (dev.RunResult, 
 		host = "localhost"
 	}
 	return dev.RunResult{
-		ProjectPath:  projectPath,
-		Port:         port,
-		DevServerURL: fmt.Sprintf("http://%s:%d", host, port),
-		PID:          "12345",
-		LogFile:      "/tmp/heya.log",
-		Command:      fmt.Sprintf("npm run dev -- --port %d", port),
-		Target:       "127.0.0.1:22",
-		StartedAt:    time.Now().UTC(),
+		ProjectPath:       projectPath,
+		Port:              port,
+		DevServerURL:      fmt.Sprintf("http://%s:%d", host, port),
+		DevServerBasePath: req.DevServerBasePath,
+		PID:               "12345",
+		LogFile:           "/tmp/heya.log",
+		Command:           fmt.Sprintf("npm run dev -- --port %d", port),
+		Target:            "127.0.0.1:22",
+		StartedAt:         time.Now().UTC(),
 	}, nil
 }
 
@@ -187,6 +192,12 @@ func TestDevRunWebSocketResolvesProjectUser(t *testing.T) {
 	if message.DevServerURL != "http://91.98.82.198:12017" {
 		t.Fatalf("devServerURL = %q, want %q", message.DevServerURL, "http://91.98.82.198:12017")
 	}
+	if message.DevProxyURL != testServer.URL+"/dev/proxy/energy-user/" {
+		t.Fatalf("devProxyURL = %q, want %q", message.DevProxyURL, testServer.URL+"/dev/proxy/energy-user/")
+	}
+	if message.Run.DevServerBasePath != "/dev/proxy/energy-user/" {
+		t.Fatalf("run DevServerBasePath = %q, want %q", message.Run.DevServerBasePath, "/dev/proxy/energy-user/")
+	}
 	req := runner.lastRequest()
 	if req.ProjectPath != projectDir {
 		t.Fatalf("runner ProjectPath = %q, want %q", req.ProjectPath, projectDir)
@@ -196,6 +207,9 @@ func TestDevRunWebSocketResolvesProjectUser(t *testing.T) {
 	}
 	if req.DevServerHost != "91.98.82.198" {
 		t.Fatalf("runner DevServerHost = %q, want 91.98.82.198", req.DevServerHost)
+	}
+	if req.DevServerBasePath != "/dev/proxy/energy-user/" {
+		t.Fatalf("runner DevServerBasePath = %q, want %q", req.DevServerBasePath, "/dev/proxy/energy-user/")
 	}
 }
 
@@ -221,6 +235,93 @@ func TestDevRunWebSocketAllowsConfiguredOrigin(t *testing.T) {
 	message := readWebSocketMessage(t, conn)
 	if message.DevServerURL != "http://localhost:3002" {
 		t.Fatalf("devServerURL = %q, want %q", message.DevServerURL, "http://localhost:3002")
+	}
+}
+
+func TestDevProxyProxiesProjectUserToLocalDevServer(t *testing.T) {
+	baseDir := t.TempDir()
+	projectDir := filepath.Join(baseDir, "account", "storage", "app", "frontend")
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatalf("create project dir: %v", err)
+	}
+
+	var upstreamPath string
+	var upstreamQuery string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamPath = r.URL.Path
+		upstreamQuery = r.URL.RawQuery
+		w.Header().Set("X-Upstream", "vite")
+		_, _ = w.Write([]byte("proxied dev server"))
+	}))
+	defer upstream.Close()
+	upstreamPort := serverPort(t, upstream.URL)
+
+	accountServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"account": map[string]any{
+				"id":            257,
+				"uuid":          "account-uuid",
+				"username":      "energy-user",
+				"label":         "Energy Bridge",
+				"port_dev_live": upstreamPort,
+			},
+			"server_ip":              "91.98.82.198",
+			"working_directory":      filepath.Dir(filepath.Dir(filepath.Dir(projectDir))),
+			"working_directory_heya": projectDir,
+		})
+	}))
+	defer accountServer.Close()
+
+	runner := &fakeRunner{}
+	server := NewServer(config.Config{
+		ProjectBaseDir:     baseDir,
+		DefaultProjectDir:  projectDir,
+		DefaultDevPort:     3002,
+		DevReadyHost:       "127.0.0.1",
+		DevIdleTimeout:     20 * time.Millisecond,
+		ProcessStopTimeout: time.Second,
+		AccountInfoURL:     accountServer.URL,
+		AccountInfoToken:   "test-token",
+		AccountInfoTimeout: time.Second,
+	}, runner, slog.Default())
+	testServer := httptest.NewServer(server.Routes())
+	defer testServer.Close()
+
+	resp, err := http.Get(testServer.URL + "/dev/proxy/energy-user/hello?foo=bar&projectUser=ignored")
+	if err != nil {
+		t.Fatalf("GET dev proxy: %v", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read response body: %v", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", resp.StatusCode, http.StatusOK, string(body))
+	}
+	if string(body) != "proxied dev server" {
+		t.Fatalf("body = %q, want proxied dev server", string(body))
+	}
+	if resp.Header.Get("X-Upstream") != "vite" {
+		t.Fatalf("X-Upstream = %q, want vite", resp.Header.Get("X-Upstream"))
+	}
+	if upstreamPath != "/hello" {
+		t.Fatalf("upstream path = %q, want %q", upstreamPath, "/hello")
+	}
+	if upstreamQuery != "foo=bar" {
+		t.Fatalf("upstream query = %q, want %q", upstreamQuery, "foo=bar")
+	}
+
+	req := runner.lastRequest()
+	if req.ProjectPath != projectDir {
+		t.Fatalf("runner ProjectPath = %q, want %q", req.ProjectPath, projectDir)
+	}
+	if req.Port != upstreamPort {
+		t.Fatalf("runner Port = %d, want %d", req.Port, upstreamPort)
+	}
+	if req.DevServerBasePath != "/dev/proxy/energy-user/" {
+		t.Fatalf("runner DevServerBasePath = %q, want %q", req.DevServerBasePath, "/dev/proxy/energy-user/")
 	}
 }
 
@@ -522,18 +623,44 @@ func readWebSocketMap(t *testing.T, conn *websocket.Conn) map[string]any {
 
 func readWebSocketMessage(t *testing.T, conn *websocket.Conn) struct {
 	DevServerURL string `json:"devServerURL"`
+	DevProxyURL  string `json:"devProxyURL"`
 	Connections  int    `json:"connections"`
+	Run          struct {
+		DevServerBasePath string `json:"devServerBasePath"`
+	} `json:"run"`
 } {
 	t.Helper()
 
 	var message struct {
 		DevServerURL string `json:"devServerURL"`
+		DevProxyURL  string `json:"devProxyURL"`
 		Connections  int    `json:"connections"`
+		Run          struct {
+			DevServerBasePath string `json:"devServerBasePath"`
+		} `json:"run"`
 	}
 	if err := conn.ReadJSON(&message); err != nil {
 		t.Fatalf("ReadJSON() error = %v", err)
 	}
 	return message
+}
+
+func serverPort(t *testing.T, rawURL string) int {
+	t.Helper()
+
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		t.Fatalf("parse URL: %v", err)
+	}
+	_, rawPort, err := net.SplitHostPort(parsed.Host)
+	if err != nil {
+		t.Fatalf("split host port: %v", err)
+	}
+	port, err := strconv.Atoi(rawPort)
+	if err != nil {
+		t.Fatalf("parse port: %v", err)
+	}
+	return port
 }
 
 func waitForCounts(t *testing.T, runner *fakeRunner, wantRunCount, wantStopCount int) {

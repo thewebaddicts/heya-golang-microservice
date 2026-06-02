@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/http/httputil"
 	"net/url"
 	"strconv"
 	"strings"
@@ -42,6 +43,8 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /healthz", s.handleHealth)
 	mux.HandleFunc("GET /dev/run", s.handleDevRunWebSocket)
 	mux.HandleFunc("GET /build/run", s.handleBuildRunWebSocket)
+	mux.HandleFunc("/dev/proxy", s.handleDevProxy)
+	mux.HandleFunc("/dev/proxy/", s.handleDevProxy)
 	return mux
 }
 
@@ -67,21 +70,17 @@ func (s *Server) handleDevRunWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	projectUser := strings.TrimSpace(r.URL.Query().Get("projectUser"))
 	if projectUser != "" {
-		info, err := s.accounts.Resolve(r.Context(), projectUser)
-		if err != nil {
+		if err := s.resolveDevProjectUser(r.Context(), projectUser, &req); err != nil {
 			s.logger.Error("failed to resolve dev project user", "projectUser", projectUser, "error", err)
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		req.ProjectPath = info.WorkingDirectoryHeya
-		req.Port = info.DevPort
-		req.DevServerHost = info.ServerIP
+		req.DevServerBasePath = devProxyBasePath(projectUser)
 		s.logger.Info("resolved dev run project user",
 			"projectUser", projectUser,
-			"accountUsername", info.AccountUsername,
-			"serverIP", info.ServerIP,
 			"projectPath", req.ProjectPath,
 			"port", req.Port,
+			"basePath", req.DevServerBasePath,
 		)
 	}
 
@@ -118,14 +117,18 @@ func (s *Server) handleDevRunWebSocket(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	if err := conn.WriteJSON(map[string]any{
+	payload := map[string]any{
 		"type":         "dev_server",
 		"status":       "running",
 		"projectUser":  projectUser,
 		"devServerURL": lease.Result.DevServerURL,
 		"connections":  lease.Count,
 		"run":          lease.Result,
-	}); err != nil {
+	}
+	if projectUser != "" {
+		payload["devProxyURL"] = s.absoluteDevProxyURL(r, projectUser)
+	}
+	if err := conn.WriteJSON(payload); err != nil {
 		return
 	}
 
@@ -156,6 +159,189 @@ func queryBool(values url.Values, key string) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+func (s *Server) handleDevProxy(w http.ResponseWriter, r *http.Request) {
+	if websocket.IsWebSocketUpgrade(r) && !s.isAllowedWebSocketOrigin(r) {
+		writeError(w, http.StatusForbidden, "websocket origin is not allowed")
+		return
+	}
+
+	req, projectUser, upstreamPath, upstreamQuery, redirectURL, err := s.devProxyRequest(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if redirectURL != "" {
+		http.Redirect(w, r, redirectURL, http.StatusTemporaryRedirect)
+		return
+	}
+
+	s.logger.Info("received dev proxy request",
+		"projectUser", projectUser,
+		"projectPath", req.ProjectPath,
+		"port", req.Port,
+		"basePath", req.DevServerBasePath,
+		"upstreamPath", upstreamPath,
+	)
+
+	lease, err := s.manager.Acquire(r.Context(), req)
+	if err != nil {
+		s.logger.Error("failed to start dev server for proxy", "projectUser", projectUser, "error", err)
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	defer func() {
+		releaseCtx, cancel := context.WithTimeout(context.Background(), s.processStopTimeout())
+		defer cancel()
+		if err := lease.Release(releaseCtx); err != nil {
+			s.logger.Error("failed to release dev proxy lease", "projectUser", projectUser, "error", err)
+		}
+	}()
+
+	target := &url.URL{
+		Scheme: "http",
+		Host:   net.JoinHostPort(s.devProxyTargetHost(), strconv.Itoa(lease.Result.Port)),
+	}
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	proxy.Director = func(proxyReq *http.Request) {
+		proxyReq.URL.Scheme = target.Scheme
+		proxyReq.URL.Host = target.Host
+		proxyReq.URL.Path = upstreamPath
+		proxyReq.URL.RawPath = ""
+		proxyReq.URL.RawQuery = upstreamQuery
+		proxyReq.Host = target.Host
+		proxyReq.Header.Set("X-Forwarded-Host", r.Host)
+		proxyReq.Header.Set("X-Forwarded-Proto", requestScheme(r))
+		if req.DevServerBasePath != "" {
+			proxyReq.Header.Set("X-Forwarded-Prefix", strings.TrimSuffix(req.DevServerBasePath, "/"))
+		}
+	}
+	proxy.ErrorHandler = func(rw http.ResponseWriter, proxyReq *http.Request, proxyErr error) {
+		s.logger.Error("dev proxy request failed",
+			"projectUser", projectUser,
+			"target", target.String(),
+			"path", upstreamPath,
+			"error", proxyErr,
+		)
+		writeError(rw, http.StatusBadGateway, "dev proxy request failed")
+	}
+	proxy.ServeHTTP(w, r)
+}
+
+func (s *Server) devProxyRequest(r *http.Request) (dev.RunRequest, string, string, string, string, error) {
+	req, err := s.runRequestFromQuery(r.URL.Query())
+	if err != nil {
+		return dev.RunRequest{}, "", "", "", "", err
+	}
+
+	projectUser, upstreamPath, redirectURL := devProxyPathParts(r)
+	if projectUser == "" {
+		projectUser = strings.TrimSpace(r.URL.Query().Get("projectUser"))
+	}
+	if upstreamPath == "" {
+		upstreamPath = "/"
+	}
+
+	if projectUser != "" {
+		if err := s.resolveDevProjectUser(r.Context(), projectUser, &req); err != nil {
+			return dev.RunRequest{}, "", "", "", "", err
+		}
+		req.DevServerBasePath = devProxyBasePath(projectUser)
+	} else if strings.TrimSpace(req.ProjectPath) == "" {
+		return dev.RunRequest{}, "", "", "", "", config.ValidationError("projectUser is required for dev proxy")
+	}
+
+	upstreamQuery := cleanDevProxyQuery(r.URL.Query()).Encode()
+	return req, projectUser, upstreamPath, upstreamQuery, redirectURL, nil
+}
+
+func devProxyPathParts(r *http.Request) (string, string, string) {
+	if r.URL.Path == "/dev/proxy" {
+		return "", "/", ""
+	}
+
+	pathPart := strings.TrimPrefix(r.URL.Path, "/dev/proxy/")
+	if pathPart == "" {
+		return "", "/", ""
+	}
+
+	separator := strings.Index(pathPart, "/")
+	if separator == -1 {
+		redirect := *r.URL
+		redirect.Path = r.URL.Path + "/"
+		return pathPart, "/", redirect.String()
+	}
+
+	projectUser := pathPart[:separator]
+	upstreamPath := pathPart[separator:]
+	if upstreamPath == "" {
+		upstreamPath = "/"
+	}
+	return projectUser, upstreamPath, ""
+}
+
+func cleanDevProxyQuery(values url.Values) url.Values {
+	cleaned := make(url.Values, len(values))
+	for key, value := range values {
+		switch key {
+		case "projectUser", "projectPath", "port":
+			continue
+		default:
+			cleaned[key] = append([]string(nil), value...)
+		}
+	}
+	return cleaned
+}
+
+func (s *Server) resolveDevProjectUser(ctx context.Context, projectUser string, req *dev.RunRequest) error {
+	info, err := s.accounts.Resolve(ctx, projectUser)
+	if err != nil {
+		return err
+	}
+	req.ProjectPath = info.WorkingDirectoryHeya
+	req.Port = info.DevPort
+	req.DevServerHost = info.ServerIP
+	s.logger.Info("resolved dev project user",
+		"projectUser", projectUser,
+		"accountUsername", info.AccountUsername,
+		"serverIP", info.ServerIP,
+		"projectPath", req.ProjectPath,
+		"port", req.Port,
+	)
+	return nil
+}
+
+func devProxyBasePath(projectUser string) string {
+	return "/dev/proxy/" + url.PathEscape(projectUser) + "/"
+}
+
+func (s *Server) absoluteDevProxyURL(r *http.Request, projectUser string) string {
+	return requestScheme(r) + "://" + r.Host + devProxyBasePath(projectUser)
+}
+
+func requestScheme(r *http.Request) string {
+	forwardedProto := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto"))
+	if forwardedProto != "" {
+		if comma := strings.Index(forwardedProto, ","); comma >= 0 {
+			forwardedProto = strings.TrimSpace(forwardedProto[:comma])
+		}
+		return forwardedProto
+	}
+	if r.TLS != nil {
+		return "https"
+	}
+	return "http"
+}
+
+func (s *Server) devProxyTargetHost() string {
+	host := strings.TrimSpace(s.cfg.DevReadyHost)
+	switch host {
+	case "", "0.0.0.0":
+		return "localhost"
+	default:
+		return host
 	}
 }
 
