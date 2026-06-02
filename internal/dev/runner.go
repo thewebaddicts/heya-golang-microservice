@@ -31,15 +31,17 @@ type RunRequest struct {
 }
 
 type RunResult struct {
-	ProjectPath       string    `json:"projectPath"`
-	Port              int       `json:"port"`
-	DevServerURL      string    `json:"devServerURL"`
-	DevServerBasePath string    `json:"devServerBasePath,omitempty"`
-	PID               string    `json:"pid"`
-	LogFile           string    `json:"logFile"`
-	Command           string    `json:"command"`
-	Target            string    `json:"target"`
-	StartedAt         time.Time `json:"startedAt"`
+	ProjectPath              string    `json:"projectPath"`
+	Port                     int       `json:"port"`
+	DevServerURL             string    `json:"devServerURL"`
+	DevServerBasePath        string    `json:"devServerBasePath,omitempty"`
+	DevServerPublicHost      string    `json:"devServerPublicHost,omitempty"`
+	DevServerProxyConfigFile string    `json:"devServerProxyConfigFile,omitempty"`
+	PID                      string    `json:"pid"`
+	LogFile                  string    `json:"logFile"`
+	Command                  string    `json:"command"`
+	Target                   string    `json:"target"`
+	StartedAt                time.Time `json:"startedAt"`
 }
 
 type Runner interface {
@@ -116,15 +118,17 @@ func (r *LocalRunner) Run(ctx context.Context, req RunRequest) (RunResult, error
 	}()
 
 	result := RunResult{
-		ProjectPath:       projectDir,
-		Port:              port,
-		DevServerURL:      r.devServerURL(port, req.DevServerHost),
-		DevServerBasePath: basePath,
-		PID:               strconv.Itoa(cmd.Process.Pid),
-		LogFile:           logFile,
-		Command:           command,
-		Target:            "local",
-		StartedAt:         startedAt,
+		ProjectPath:              projectDir,
+		Port:                     port,
+		DevServerURL:             r.devServerURL(port, req.DevServerHost),
+		DevServerBasePath:        basePath,
+		DevServerPublicHost:      strings.TrimSpace(req.DevServerPublicHost),
+		DevServerProxyConfigFile: proxyConfigFile,
+		PID:                      strconv.Itoa(cmd.Process.Pid),
+		LogFile:                  logFile,
+		Command:                  command,
+		Target:                   "local",
+		StartedAt:                startedAt,
 	}
 	readyURL := r.devReadyURL(port)
 	localURL := r.devLocalURL(port)
@@ -309,7 +313,7 @@ func shellDevCommand(npmBin, bindHost, basePath, configFile string, port int) st
 	if bindHost == "" {
 		bindHost = "0.0.0.0"
 	}
-	command := shellQuote(npmBin) + " run dev -- --host " + shellQuote(bindHost) + " --port " + strconv.Itoa(port)
+	command := shellQuote(npmBin) + " run dev -- --host " + shellQuote(bindHost) + " --port " + strconv.Itoa(port) + " --strictPort"
 	basePath = normalizeDevServerBasePath(basePath)
 	if basePath != "" {
 		command += " --base " + shellQuote(basePath)

@@ -12,7 +12,7 @@ import (
 
 func TestShellDevCommandUsesNPMAndPort(t *testing.T) {
 	got := shellDevCommand("npm", "0.0.0.0", "", "", 3002)
-	want := "'npm' run dev -- --host '0.0.0.0' --port 3002"
+	want := "'npm' run dev -- --host '0.0.0.0' --port 3002 --strictPort"
 	if got != want {
 		t.Fatalf("shellDevCommand() = %q, want %q", got, want)
 	}
@@ -20,7 +20,7 @@ func TestShellDevCommandUsesNPMAndPort(t *testing.T) {
 
 func TestShellDevCommandQuotesNPMPath(t *testing.T) {
 	got := shellDevCommand("/path with spaces/npm", "0.0.0.0", "", "", 3002)
-	want := "'/path with spaces/npm' run dev -- --host '0.0.0.0' --port 3002"
+	want := "'/path with spaces/npm' run dev -- --host '0.0.0.0' --port 3002 --strictPort"
 	if got != want {
 		t.Fatalf("shellDevCommand() = %q, want %q", got, want)
 	}
@@ -28,7 +28,7 @@ func TestShellDevCommandQuotesNPMPath(t *testing.T) {
 
 func TestShellDevCommandDefaultsBindHost(t *testing.T) {
 	got := shellDevCommand("npm", "", "", "", 3002)
-	want := "'npm' run dev -- --host '0.0.0.0' --port 3002"
+	want := "'npm' run dev -- --host '0.0.0.0' --port 3002 --strictPort"
 	if got != want {
 		t.Fatalf("shellDevCommand() = %q, want %q", got, want)
 	}
@@ -36,7 +36,7 @@ func TestShellDevCommandDefaultsBindHost(t *testing.T) {
 
 func TestShellDevCommandIncludesBasePath(t *testing.T) {
 	got := shellDevCommand("npm", "0.0.0.0", "/dev/proxy/energy-user/", "", 3002)
-	want := "'npm' run dev -- --host '0.0.0.0' --port 3002 --base '/dev/proxy/energy-user/'"
+	want := "'npm' run dev -- --host '0.0.0.0' --port 3002 --strictPort --base '/dev/proxy/energy-user/'"
 	if got != want {
 		t.Fatalf("shellDevCommand() = %q, want %q", got, want)
 	}
@@ -44,7 +44,7 @@ func TestShellDevCommandIncludesBasePath(t *testing.T) {
 
 func TestShellDevCommandIncludesConfigFile(t *testing.T) {
 	got := shellDevCommand("npm", "0.0.0.0", "/themes/store/install/", "/tmp/vite proxy.mjs", 3002)
-	want := "'npm' run dev -- --host '0.0.0.0' --port 3002 --base '/themes/store/install/' --config '/tmp/vite proxy.mjs'"
+	want := "'npm' run dev -- --host '0.0.0.0' --port 3002 --strictPort --base '/themes/store/install/' --config '/tmp/vite proxy.mjs'"
 	if got != want {
 		t.Fatalf("shellDevCommand() = %q, want %q", got, want)
 	}

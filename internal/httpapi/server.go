@@ -156,6 +156,15 @@ func (s *Server) handleDevRunWebSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if projectUser != "" && req.DevServerPublicHost != "" && lease.Result.DevServerPublicHost != "" && lease.Result.DevServerPublicHost != req.DevServerPublicHost {
+		_ = conn.WriteJSON(map[string]string{
+			"type":   "error",
+			"status": "failed",
+			"error":  "dev server is already running with public host " + lease.Result.DevServerPublicHost + "; requested " + req.DevServerPublicHost,
+		})
+		return
+	}
+
 	if projectUser != "" && proxyURLs.IsTheme {
 		if err := s.registerThemeProxyRoute(proxyURLs.BasePath, projectUser, req); err != nil {
 			_ = conn.WriteJSON(map[string]string{
