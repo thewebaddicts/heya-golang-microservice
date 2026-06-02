@@ -627,6 +627,9 @@ func TestThemeProxyRewritesBuildAssetURLsAndStripsAssetBasePath(t *testing.T) {
 		case "/api/theme-page/by-file":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"ok":true}`))
+		case "/api/theme-watch/version":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"version":1}`))
 		default:
 			http.NotFound(w, r)
 		}
@@ -737,6 +740,23 @@ func TestThemeProxyRewritesBuildAssetURLsAndStripsAssetBasePath(t *testing.T) {
 		t.Fatalf("upstream path = %q, want %q", upstreamPath, "/api/theme-page/by-file")
 	}
 
+	reqWatchAPI, err := http.NewRequest(http.MethodGet, testServer.URL+"/themes/57726969-9e2e-11ed-9f8e-42010a960004/z-6a1ef6c3dcca6/api/theme-watch/version?themeUuid=57726969-9e2e-11ed-9f8e-42010a960004&installationId=z-6a1ef6c3dcca6&_=1780438674941", nil)
+	if err != nil {
+		t.Fatalf("create theme watch API request: %v", err)
+	}
+	reqWatchAPI.Host = "91-98-82-198-heya-service.twalab.cloud"
+	respWatchAPI, err := http.DefaultClient.Do(reqWatchAPI)
+	if err != nil {
+		t.Fatalf("GET theme watch API: %v", err)
+	}
+	defer respWatchAPI.Body.Close()
+	if upstreamPath != "/api/theme-watch/version" {
+		t.Fatalf("upstream path = %q, want %q", upstreamPath, "/api/theme-watch/version")
+	}
+	if upstreamQuery != "themeUuid=57726969-9e2e-11ed-9f8e-42010a960004&installationId=z-6a1ef6c3dcca6&_=1780438674941" {
+		t.Fatalf("upstream query = %q, want theme watch query", upstreamQuery)
+	}
+
 	reqRootBuild, err := http.NewRequest(http.MethodGet, testServer.URL+"/_build/@fs/home/energy-user/app/src/routes/themes/57726969-9e2e-11ed-9f8e-42010a960004/z-6a1ef6c3dcca6/index.tsx?import&pick=default&pick=$css", nil)
 	if err != nil {
 		t.Fatalf("create root build request: %v", err)
@@ -770,6 +790,24 @@ func TestThemeProxyRewritesBuildAssetURLsAndStripsAssetBasePath(t *testing.T) {
 	defer respRootBuildNoReferer.Body.Close()
 	if respRootBuildNoReferer.StatusCode != http.StatusOK {
 		t.Fatalf("root build no-referer status = %d, want %d", respRootBuildNoReferer.StatusCode, http.StatusOK)
+	}
+
+	reqRootWatchAPI, err := http.NewRequest(http.MethodGet, testServer.URL+"/api/theme-watch/version?themeUuid=57726969-9e2e-11ed-9f8e-42010a960004&installationId=z-6a1ef6c3dcca6&_=1780438674941", nil)
+	if err != nil {
+		t.Fatalf("create root theme watch API request: %v", err)
+	}
+	reqRootWatchAPI.Host = "91-98-82-198-heya-service.twalab.cloud"
+	reqRootWatchAPI.Header.Set("Referer", "https://91-98-82-198-heya-service.twalab.cloud/themes/57726969-9e2e-11ed-9f8e-42010a960004/z-6a1ef6c3dcca6?preview=true")
+	respRootWatchAPI, err := http.DefaultClient.Do(reqRootWatchAPI)
+	if err != nil {
+		t.Fatalf("GET root theme watch API request: %v", err)
+	}
+	defer respRootWatchAPI.Body.Close()
+	if respRootWatchAPI.StatusCode != http.StatusOK {
+		t.Fatalf("root theme watch API status = %d, want %d", respRootWatchAPI.StatusCode, http.StatusOK)
+	}
+	if upstreamPath != "/api/theme-watch/version" {
+		t.Fatalf("upstream path = %q, want %q", upstreamPath, "/api/theme-watch/version")
 	}
 }
 
