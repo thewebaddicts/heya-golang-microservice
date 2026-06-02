@@ -3,6 +3,7 @@ package dev
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -10,7 +11,7 @@ import (
 )
 
 func TestShellDevCommandUsesNPMAndPort(t *testing.T) {
-	got := shellDevCommand("npm", "0.0.0.0", "", 3002)
+	got := shellDevCommand("npm", "0.0.0.0", "", "", 3002)
 	want := "'npm' run dev -- --host '0.0.0.0' --port 3002"
 	if got != want {
 		t.Fatalf("shellDevCommand() = %q, want %q", got, want)
@@ -18,7 +19,7 @@ func TestShellDevCommandUsesNPMAndPort(t *testing.T) {
 }
 
 func TestShellDevCommandQuotesNPMPath(t *testing.T) {
-	got := shellDevCommand("/path with spaces/npm", "0.0.0.0", "", 3002)
+	got := shellDevCommand("/path with spaces/npm", "0.0.0.0", "", "", 3002)
 	want := "'/path with spaces/npm' run dev -- --host '0.0.0.0' --port 3002"
 	if got != want {
 		t.Fatalf("shellDevCommand() = %q, want %q", got, want)
@@ -26,7 +27,7 @@ func TestShellDevCommandQuotesNPMPath(t *testing.T) {
 }
 
 func TestShellDevCommandDefaultsBindHost(t *testing.T) {
-	got := shellDevCommand("npm", "", "", 3002)
+	got := shellDevCommand("npm", "", "", "", 3002)
 	want := "'npm' run dev -- --host '0.0.0.0' --port 3002"
 	if got != want {
 		t.Fatalf("shellDevCommand() = %q, want %q", got, want)
@@ -34,8 +35,16 @@ func TestShellDevCommandDefaultsBindHost(t *testing.T) {
 }
 
 func TestShellDevCommandIncludesBasePath(t *testing.T) {
-	got := shellDevCommand("npm", "0.0.0.0", "/dev/proxy/energy-user/", 3002)
+	got := shellDevCommand("npm", "0.0.0.0", "/dev/proxy/energy-user/", "", 3002)
 	want := "'npm' run dev -- --host '0.0.0.0' --port 3002 --base '/dev/proxy/energy-user/'"
+	if got != want {
+		t.Fatalf("shellDevCommand() = %q, want %q", got, want)
+	}
+}
+
+func TestShellDevCommandIncludesConfigFile(t *testing.T) {
+	got := shellDevCommand("npm", "0.0.0.0", "/themes/store/install/", "/tmp/vite proxy.mjs", 3002)
+	want := "'npm' run dev -- --host '0.0.0.0' --port 3002 --base '/themes/store/install/' --config '/tmp/vite proxy.mjs'"
 	if got != want {
 		t.Fatalf("shellDevCommand() = %q, want %q", got, want)
 	}
@@ -60,6 +69,22 @@ func TestDevServerEnvironmentAddsViteAllowedHost(t *testing.T) {
 	want := "__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS=91-98-82-198-heya-service.twalab.cloud"
 	if !containsEnv(got, want) {
 		t.Fatalf("environment does not contain %q: %#v", want, got)
+	}
+}
+
+func TestViteProxyConfigSourceMergesAllowedHostAndHMR(t *testing.T) {
+	got := viteProxyConfigSource("/srv/app/vite.config.ts", "91-98-82-198-heya-service.twalab.cloud", "/themes/store/install/")
+	for _, want := range []string{
+		`import originalConfigModule from "file:///srv/app/vite.config.ts"`,
+		`const proxyAllowedHost = "91-98-82-198-heya-service.twalab.cloud"`,
+		`const proxyHMRPath = "/themes/store/install/__vite_hmr"`,
+		`allowedHosts = Array.from(new Set([...hostList, proxyAllowedHost]))`,
+		`protocol: "wss"`,
+		`clientPort: 443`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("viteProxyConfigSource() missing %q in:\n%s", want, got)
+		}
 	}
 }
 

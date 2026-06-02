@@ -2,12 +2,14 @@ package dev
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -85,7 +87,11 @@ func (r *LocalRunner) Run(ctx context.Context, req RunRequest) (RunResult, error
 
 	bindHost := r.devServerBindHost()
 	basePath := normalizeDevServerBasePath(req.DevServerBasePath)
-	command := shellDevCommand(r.cfg.NPMBin, bindHost, basePath, port)
+	proxyConfigFile, err := r.writeViteProxyConfig(projectDir, req.DevServerPublicHost, basePath, startedAt)
+	if err != nil {
+		return RunResult{}, err
+	}
+	command := shellDevCommand(r.cfg.NPMBin, bindHost, basePath, proxyConfigFile, port)
 	cmd := exec.Command(r.cfg.CommandShell, shellArgs(r.cfg.CommandShell, command)...)
 	cmd.Dir = projectDir
 	cmd.Env = devServerEnvironment(os.Environ(), req.DevServerPublicHost)
@@ -294,7 +300,7 @@ func validateProjectDir(projectDir string) error {
 	return nil
 }
 
-func shellDevCommand(npmBin, bindHost, basePath string, port int) string {
+func shellDevCommand(npmBin, bindHost, basePath, configFile string, port int) string {
 	npmBin = strings.TrimSpace(npmBin)
 	if npmBin == "" {
 		npmBin = "npm"
@@ -307,6 +313,10 @@ func shellDevCommand(npmBin, bindHost, basePath string, port int) string {
 	basePath = normalizeDevServerBasePath(basePath)
 	if basePath != "" {
 		command += " --base " + shellQuote(basePath)
+	}
+	configFile = strings.TrimSpace(configFile)
+	if configFile != "" {
+		command += " --config " + shellQuote(configFile)
 	}
 	return command
 }
@@ -342,6 +352,121 @@ func upsertEnv(env []string, key, value string) []string {
 		}
 	}
 	return append(env, prefix+value)
+}
+
+func (r *LocalRunner) writeViteProxyConfig(projectDir, publicHost, basePath string, startedAt time.Time) (string, error) {
+	publicHost = strings.TrimSpace(publicHost)
+	if publicHost == "" {
+		return "", nil
+	}
+
+	configDir := filepath.Join(r.cfg.LogDir, "vite-proxy-configs")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		return "", fmt.Errorf("create vite proxy config directory: %w", err)
+	}
+
+	configFile := filepath.Join(configDir, proxyConfigFileName(projectDir, startedAt))
+	source := viteProxyConfigSource(findViteConfig(projectDir), publicHost, basePath)
+	if err := os.WriteFile(configFile, []byte(source), 0o644); err != nil {
+		return "", fmt.Errorf("write vite proxy config: %w", err)
+	}
+	return configFile, nil
+}
+
+func proxyConfigFileName(projectDir string, startedAt time.Time) string {
+	projectName := filepath.Base(projectDir)
+	projectName = regexp.MustCompile(`[^a-zA-Z0-9._-]+`).ReplaceAllString(projectName, "-")
+	if projectName == "" || projectName == "." || projectName == "/" {
+		projectName = "solidjs-project"
+	}
+	return fmt.Sprintf("%s-%s.mjs", projectName, startedAt.Format("20060102T150405Z"))
+}
+
+func findViteConfig(projectDir string) string {
+	for _, fileName := range []string{
+		"vite.config.ts",
+		"vite.config.mts",
+		"vite.config.cts",
+		"vite.config.js",
+		"vite.config.mjs",
+		"vite.config.cjs",
+	} {
+		path := filepath.Join(projectDir, fileName)
+		if info, err := os.Stat(path); err == nil && !info.IsDir() {
+			return path
+		}
+	}
+	return ""
+}
+
+func viteProxyConfigSource(originalConfigPath, publicHost, basePath string) string {
+	basePath = normalizeDevServerBasePath(basePath)
+	hmrPath := basePath + "__vite_hmr"
+	if basePath == "" {
+		hmrPath = "/__vite_hmr"
+	}
+
+	var builder strings.Builder
+	builder.WriteString("const proxyAllowedHost = ")
+	builder.WriteString(jsString(publicHost))
+	builder.WriteString("\nconst proxyHMRPath = ")
+	builder.WriteString(jsString(hmrPath))
+	builder.WriteString("\n")
+	if originalConfigPath != "" {
+		builder.WriteString("import originalConfigModule from ")
+		builder.WriteString(jsString(fileURL(originalConfigPath)))
+		builder.WriteString("\nconst originalConfig = originalConfigModule.default ?? originalConfigModule\n")
+	} else {
+		builder.WriteString("const originalConfig = {}\n")
+	}
+	builder.WriteString(`
+function mergeProxyConfig(config) {
+  const baseConfig = config && typeof config === "object" ? config : {}
+  const server = baseConfig.server && typeof baseConfig.server === "object" ? baseConfig.server : {}
+  let allowedHosts = server.allowedHosts
+  if (allowedHosts !== true) {
+    const hostList = Array.isArray(allowedHosts) ? allowedHosts : []
+    allowedHosts = Array.from(new Set([...hostList, proxyAllowedHost]))
+  }
+  let hmr = server.hmr
+  if (hmr !== false) {
+    const hmrConfig = hmr && typeof hmr === "object" ? hmr : {}
+    hmr = {
+      ...hmrConfig,
+      protocol: "wss",
+      host: proxyAllowedHost,
+      clientPort: 443,
+      path: proxyHMRPath,
+    }
+  }
+  return {
+    ...baseConfig,
+    server: {
+      ...server,
+      allowedHosts,
+      hmr,
+    },
+  }
+}
+
+export default async function proxyConfig(env) {
+  const resolved = typeof originalConfig === "function" ? await originalConfig(env) : originalConfig
+  return mergeProxyConfig(resolved)
+}
+`)
+	return builder.String()
+}
+
+func fileURL(path string) string {
+	return (&url.URL{Scheme: "file", Path: path}).String()
+}
+
+func jsString(value string) string {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return `""`
+	}
+	return string(encoded)
 }
 
 func prependPath(env []string, prefix string) []string {
