@@ -54,7 +54,7 @@ func (s *Server) handleDevRunWebSocket(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUpgradeRequired, "websocket upgrade required")
 		return
 	}
-	if !isAllowedWebSocketOrigin(r) {
+	if !s.isAllowedWebSocketOrigin(r) {
 		writeError(w, http.StatusForbidden, "websocket origin is not allowed")
 		return
 	}
@@ -164,7 +164,7 @@ func (s *Server) handleBuildRunWebSocket(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusUpgradeRequired, "websocket upgrade required")
 		return
 	}
-	if !isAllowedWebSocketOrigin(r) {
+	if !s.isAllowedWebSocketOrigin(r) {
 		writeError(w, http.StatusForbidden, "websocket origin is not allowed")
 		return
 	}
@@ -247,9 +247,13 @@ func (s *Server) handleBuildRunWebSocket(w http.ResponseWriter, r *http.Request)
 func (s *Server) upgrader() websocket.Upgrader {
 	return websocket.Upgrader{
 		CheckOrigin: func(r *http.Request) bool {
-			return isAllowedWebSocketOrigin(r)
+			return s.isAllowedWebSocketOrigin(r)
 		},
 	}
+}
+
+func (s *Server) isAllowedWebSocketOrigin(r *http.Request) bool {
+	return isAllowedWebSocketOrigin(r, s.cfg.WebSocketAllowedOrigins)
 }
 
 func (s *Server) processStopTimeout() time.Duration {
@@ -299,14 +303,14 @@ func (s *Server) waitForDisconnect(conn *websocket.Conn) {
 	}
 }
 
-func isAllowedWebSocketOrigin(r *http.Request) bool {
+func isAllowedWebSocketOrigin(r *http.Request, allowedOrigins []string) bool {
 	origin := strings.TrimSpace(r.Header.Get("Origin"))
 	if origin == "" {
 		return true
 	}
 
-	originURL, err := url.Parse(origin)
-	if err != nil {
+	normalizedOrigin, originURL, ok := normalizeWebSocketOrigin(origin)
+	if !ok {
 		return false
 	}
 
@@ -320,12 +324,41 @@ func isAllowedWebSocketOrigin(r *http.Request) bool {
 		return true
 	}
 
-	switch originHost {
+	for _, allowedOrigin := range allowedOrigins {
+		normalizedAllowedOrigin, _, ok := normalizeWebSocketOrigin(allowedOrigin)
+		if ok && normalizedAllowedOrigin == normalizedOrigin {
+			return true
+		}
+	}
+
+	switch strings.ToLower(originHost) {
 	case "localhost", "127.0.0.1", "::1":
 		return true
 	default:
 		return false
 	}
+}
+
+func normalizeWebSocketOrigin(origin string) (string, *url.URL, bool) {
+	originURL, err := url.Parse(strings.TrimSpace(origin))
+	if err != nil {
+		return "", nil, false
+	}
+	if originURL.Scheme == "" || originURL.Host == "" {
+		return "", nil, false
+	}
+	scheme := strings.ToLower(originURL.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return "", nil, false
+	}
+	if originURL.User != nil || originURL.RawQuery != "" || originURL.Fragment != "" {
+		return "", nil, false
+	}
+	if originURL.Path != "" && originURL.Path != "/" {
+		return "", nil, false
+	}
+
+	return scheme + "://" + strings.ToLower(originURL.Host), originURL, true
 }
 
 func hostname(hostport string) string {

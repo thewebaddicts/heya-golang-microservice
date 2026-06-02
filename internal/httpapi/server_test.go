@@ -199,6 +199,31 @@ func TestDevRunWebSocketResolvesProjectUser(t *testing.T) {
 	}
 }
 
+func TestDevRunWebSocketAllowsConfiguredOrigin(t *testing.T) {
+	projectDir := t.TempDir()
+	runner := &fakeRunner{}
+	server := NewServer(config.Config{
+		ProjectBaseDir:          projectDir,
+		DefaultProjectDir:       projectDir,
+		DefaultDevPort:          3002,
+		DevIdleTimeout:          20 * time.Millisecond,
+		ProcessStopTimeout:      time.Second,
+		WebSocketAllowedOrigins: []string{"https://admin.thewebaddicts.com"},
+	}, runner, slog.Default())
+	testServer := httptest.NewServer(server.Routes())
+	defer testServer.Close()
+
+	conn := dialWebSocketWithHeaders(t, "ws"+strings.TrimPrefix(testServer.URL, "http")+"/dev/run", http.Header{
+		"Origin": []string{"https://admin.thewebaddicts.com"},
+	})
+	defer conn.Close()
+
+	message := readWebSocketMessage(t, conn)
+	if message.DevServerURL != "http://localhost:3002" {
+		t.Fatalf("devServerURL = %q, want %q", message.DevServerURL, "http://localhost:3002")
+	}
+}
+
 func TestBuildRunWebSocketStreamsBuildOutput(t *testing.T) {
 	projectDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(projectDir, "package.json"), []byte(`{"scripts":{"build":"node build.mjs"}}`), 0o644); err != nil {
@@ -383,10 +408,99 @@ func TestBuildRunWebSocketWatchAttachesAfterDisconnect(t *testing.T) {
 	}
 }
 
+func TestWebSocketOriginValidation(t *testing.T) {
+	tests := []struct {
+		name           string
+		requestHost    string
+		origin         string
+		allowedOrigins []string
+		want           bool
+	}{
+		{
+			name:        "missing origin",
+			requestHost: "91-98-82-198-heya-service.twalab.cloud",
+			want:        true,
+		},
+		{
+			name:        "same host",
+			requestHost: "91-98-82-198-heya-service.twalab.cloud",
+			origin:      "https://91-98-82-198-heya-service.twalab.cloud",
+			want:        true,
+		},
+		{
+			name:        "localhost dev origin",
+			requestHost: "91-98-82-198-heya-service.twalab.cloud",
+			origin:      "http://localhost:5173",
+			want:        true,
+		},
+		{
+			name:        "localhost dev origin is case insensitive",
+			requestHost: "91-98-82-198-heya-service.twalab.cloud",
+			origin:      "http://LOCALHOST:5173",
+			want:        true,
+		},
+		{
+			name:           "configured admin origin",
+			requestHost:    "91-98-82-198-heya-service.twalab.cloud",
+			origin:         "https://admin.thewebaddicts.com",
+			allowedOrigins: []string{"https://admin.thewebaddicts.com"},
+			want:           true,
+		},
+		{
+			name:        "admin origin requires configuration",
+			requestHost: "91-98-82-198-heya-service.twalab.cloud",
+			origin:      "https://admin.thewebaddicts.com",
+			want:        false,
+		},
+		{
+			name:           "configured origin is scheme exact",
+			requestHost:    "91-98-82-198-heya-service.twalab.cloud",
+			origin:         "http://admin.thewebaddicts.com",
+			allowedOrigins: []string{"https://admin.thewebaddicts.com"},
+			want:           false,
+		},
+		{
+			name:           "unrelated origin",
+			requestHost:    "91-98-82-198-heya-service.twalab.cloud",
+			origin:         "https://example.com",
+			allowedOrigins: []string{"https://admin.thewebaddicts.com"},
+			want:           false,
+		},
+		{
+			name:           "origin with path is rejected",
+			requestHost:    "91-98-82-198-heya-service.twalab.cloud",
+			origin:         "https://admin.thewebaddicts.com/app",
+			allowedOrigins: []string{"https://admin.thewebaddicts.com"},
+			want:           false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "http://"+tt.requestHost+"/dev/run", nil)
+			req.Host = tt.requestHost
+			if tt.origin != "" {
+				req.Header.Set("Origin", tt.origin)
+			}
+
+			got := isAllowedWebSocketOrigin(req, tt.allowedOrigins)
+			if got != tt.want {
+				t.Fatalf("isAllowedWebSocketOrigin() = %t, want %t", got, tt.want)
+			}
+		})
+	}
+}
+
 func dialWebSocket(t *testing.T, url string) *websocket.Conn {
 	t.Helper()
 
-	conn, _, err := websocket.DefaultDialer.Dial(url, nil)
+	return dialWebSocketWithHeaders(t, url, nil)
+}
+
+func dialWebSocketWithHeaders(t *testing.T, url string, requestHeader http.Header) *websocket.Conn {
+	t.Helper()
+
+	conn, _, err := websocket.DefaultDialer.Dial(url, requestHeader)
 	if err != nil {
 		t.Fatalf("Dial() error = %v", err)
 	}

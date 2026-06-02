@@ -20,6 +20,7 @@ Important values:
 - `HEYA_DEFAULT_DEV_PORT`: default SolidJS dev port, default `3002`
 - `HEYA_DEV_SERVER_HOST`: host returned to WebSocket clients, default `localhost`
 - `HEYA_DEV_SERVER_SCHEME`: scheme returned to WebSocket clients, default `http`
+- `HEYA_WEBSOCKET_ALLOWED_ORIGINS`: comma-separated browser origins allowed to open WebSockets, default `https://admin.thewebaddicts.com`
 - `HEYA_NPM_BIN`: npm command used inside the shell, default `npm`
 - `HEYA_COMMAND_SHELL`: shell used to launch npm, default your `$SHELL` or `/bin/zsh`
 - `HEYA_DEV_READY_TIMEOUT`: max time to wait for the dev server URL to respond before returning an error, default `60s`

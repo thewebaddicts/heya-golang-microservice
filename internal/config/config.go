@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -10,22 +11,23 @@ import (
 )
 
 type Config struct {
-	HTTPAddr           string
-	ProjectBaseDir     string
-	DefaultProjectDir  string
-	DefaultDevPort     int
-	DevServerScheme    string
-	DevServerHost      string
-	LogDir             string
-	BuildRootDir       string
-	AccountInfoURL     string
-	AccountInfoToken   string
-	AccountInfoTimeout time.Duration
-	NPMBin             string
-	CommandShell       string
-	DevReadyTimeout    time.Duration
-	DevIdleTimeout     time.Duration
-	ProcessStopTimeout time.Duration
+	HTTPAddr                string
+	ProjectBaseDir          string
+	DefaultProjectDir       string
+	DefaultDevPort          int
+	DevServerScheme         string
+	DevServerHost           string
+	WebSocketAllowedOrigins []string
+	LogDir                  string
+	BuildRootDir            string
+	AccountInfoURL          string
+	AccountInfoToken        string
+	AccountInfoTimeout      time.Duration
+	NPMBin                  string
+	CommandShell            string
+	DevReadyTimeout         time.Duration
+	DevIdleTimeout          time.Duration
+	ProcessStopTimeout      time.Duration
 }
 
 func Load() (Config, error) {
@@ -72,24 +74,31 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	webSocketAllowedOrigins, err := envOriginList("HEYA_WEBSOCKET_ALLOWED_ORIGINS", []string{
+		"https://admin.thewebaddicts.com",
+	})
+	if err != nil {
+		return Config{}, err
+	}
 
 	return Config{
-		HTTPAddr:           envString("HEYA_HTTP_ADDR", ":8998"),
-		ProjectBaseDir:     projectBaseDir,
-		DefaultProjectDir:  defaultProjectDir,
-		DefaultDevPort:     defaultPort,
-		DevServerScheme:    envString("HEYA_DEV_SERVER_SCHEME", "http"),
-		DevServerHost:      envString("HEYA_DEV_SERVER_HOST", "localhost"),
-		LogDir:             envString("HEYA_LOG_DIR", "/tmp/heya-solidjs-manager/logs"),
-		BuildRootDir:       envString("HEYA_BUILD_ROOT_DIR", "/tmp/heya-builds"),
-		AccountInfoURL:     envString("HEYA_ACCOUNT_INFO_URL", "https://devops.twalab.live/api/v2/theme-builder/account/info"),
-		AccountInfoToken:   envString("HEYA_ACCOUNT_INFO_TOKEN", "QqJ1bbRZ2KIXrqcKb1lyxxa79wYx8IbtvxXBXv1y1uyOfjbSZU282eLgscQ1ix3Z"),
-		AccountInfoTimeout: accountInfoTimeout,
-		NPMBin:             envString("HEYA_NPM_BIN", "npm"),
-		CommandShell:       envString("HEYA_COMMAND_SHELL", envString("SHELL", "/bin/zsh")),
-		DevReadyTimeout:    devReadyTimeout,
-		DevIdleTimeout:     devIdleTimeout,
-		ProcessStopTimeout: processStopTimeout,
+		HTTPAddr:                envString("HEYA_HTTP_ADDR", ":8998"),
+		ProjectBaseDir:          projectBaseDir,
+		DefaultProjectDir:       defaultProjectDir,
+		DefaultDevPort:          defaultPort,
+		DevServerScheme:         envString("HEYA_DEV_SERVER_SCHEME", "http"),
+		DevServerHost:           envString("HEYA_DEV_SERVER_HOST", "localhost"),
+		WebSocketAllowedOrigins: webSocketAllowedOrigins,
+		LogDir:                  envString("HEYA_LOG_DIR", "/tmp/heya-solidjs-manager/logs"),
+		BuildRootDir:            envString("HEYA_BUILD_ROOT_DIR", "/tmp/heya-builds"),
+		AccountInfoURL:          envString("HEYA_ACCOUNT_INFO_URL", "https://devops.twalab.live/api/v2/theme-builder/account/info"),
+		AccountInfoToken:        envString("HEYA_ACCOUNT_INFO_TOKEN", "QqJ1bbRZ2KIXrqcKb1lyxxa79wYx8IbtvxXBXv1y1uyOfjbSZU282eLgscQ1ix3Z"),
+		AccountInfoTimeout:      accountInfoTimeout,
+		NPMBin:                  envString("HEYA_NPM_BIN", "npm"),
+		CommandShell:            envString("HEYA_COMMAND_SHELL", envString("SHELL", "/bin/zsh")),
+		DevReadyTimeout:         devReadyTimeout,
+		DevIdleTimeout:          devIdleTimeout,
+		ProcessStopTimeout:      processStopTimeout,
 	}, nil
 }
 
@@ -192,6 +201,50 @@ func envDuration(key string, fallback time.Duration) (time.Duration, error) {
 		return 0, fmt.Errorf("%s must be a duration such as 10s or 1m: %w", key, err)
 	}
 	return value, nil
+}
+
+func envOriginList(key string, fallback []string) ([]string, error) {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return append([]string(nil), fallback...), nil
+	}
+
+	var origins []string
+	for _, part := range strings.Split(raw, ",") {
+		origin, err := normalizeOrigin(part)
+		if err != nil {
+			return nil, fmt.Errorf("%s contains invalid origin %q: %w", key, strings.TrimSpace(part), err)
+		}
+		origins = append(origins, origin)
+	}
+	return origins, nil
+}
+
+func normalizeOrigin(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", ValidationError("origin cannot be empty")
+	}
+
+	originURL, err := url.Parse(raw)
+	if err != nil {
+		return "", err
+	}
+	if originURL.Scheme == "" || originURL.Host == "" {
+		return "", ValidationError("origin must include scheme and host")
+	}
+	scheme := strings.ToLower(originURL.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return "", ValidationError("origin scheme must be http or https")
+	}
+	if originURL.User != nil || originURL.RawQuery != "" || originURL.Fragment != "" {
+		return "", ValidationError("origin must not include user info, query, or fragment")
+	}
+	if originURL.Path != "" && originURL.Path != "/" {
+		return "", ValidationError("origin must not include a path")
+	}
+
+	return scheme + "://" + strings.ToLower(originURL.Host), nil
 }
 
 func validPort(port int) bool {
