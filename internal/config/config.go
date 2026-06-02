@@ -25,6 +25,7 @@ type Config struct {
 	AccountInfoURL          string
 	AccountInfoToken        string
 	AccountInfoTimeout      time.Duration
+	AccountInfoCacheTTL     time.Duration
 	NPMBin                  string
 	CommandShell            string
 	DevReadyTimeout         time.Duration
@@ -76,6 +77,10 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	accountInfoCacheTTL, err := envDuration("HEYA_ACCOUNT_INFO_CACHE_TTL", 10*time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
 	webSocketAllowedOrigins, err := envOriginList("HEYA_WEBSOCKET_ALLOWED_ORIGINS", []string{
 		"https://admin.thewebaddicts.com",
 	})
@@ -98,6 +103,7 @@ func Load() (Config, error) {
 		AccountInfoURL:          envString("HEYA_ACCOUNT_INFO_URL", "https://devops.twalab.live/api/v2/theme-builder/account/info"),
 		AccountInfoToken:        envString("HEYA_ACCOUNT_INFO_TOKEN", "QqJ1bbRZ2KIXrqcKb1lyxxa79wYx8IbtvxXBXv1y1uyOfjbSZU282eLgscQ1ix3Z"),
 		AccountInfoTimeout:      accountInfoTimeout,
+		AccountInfoCacheTTL:     accountInfoCacheTTL,
 		NPMBin:                  envString("HEYA_NPM_BIN", "npm"),
 		CommandShell:            envString("HEYA_COMMAND_SHELL", envString("SHELL", "/bin/zsh")),
 		DevReadyTimeout:         devReadyTimeout,

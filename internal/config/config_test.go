@@ -3,6 +3,7 @@ package config
 import (
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestResolveProjectDirUsesDefaultProjectDir(t *testing.T) {
@@ -57,6 +58,36 @@ func TestLoadUsesConfiguredDevServerBindHost(t *testing.T) {
 	}
 	if cfg.DevServerBindHost != "127.0.0.1" {
 		t.Fatalf("DevServerBindHost = %q, want %q", cfg.DevServerBindHost, "127.0.0.1")
+	}
+}
+
+func TestLoadDefaultsAccountInfoCacheTTL(t *testing.T) {
+	base := t.TempDir()
+	t.Setenv("HEYA_PROJECT_BASE_DIR", base)
+	t.Setenv("HEYA_DEFAULT_PROJECT_DIR", base)
+	t.Setenv("HEYA_ACCOUNT_INFO_CACHE_TTL", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.AccountInfoCacheTTL != 10*time.Minute {
+		t.Fatalf("AccountInfoCacheTTL = %s, want %s", cfg.AccountInfoCacheTTL, 10*time.Minute)
+	}
+}
+
+func TestLoadUsesConfiguredAccountInfoCacheTTL(t *testing.T) {
+	base := t.TempDir()
+	t.Setenv("HEYA_PROJECT_BASE_DIR", base)
+	t.Setenv("HEYA_DEFAULT_PROJECT_DIR", base)
+	t.Setenv("HEYA_ACCOUNT_INFO_CACHE_TTL", "30m")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.AccountInfoCacheTTL != 30*time.Minute {
+		t.Fatalf("AccountInfoCacheTTL = %s, want %s", cfg.AccountInfoCacheTTL, 30*time.Minute)
 	}
 }
 

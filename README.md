@@ -32,6 +32,7 @@ Important values:
 - `HEYA_ACCOUNT_INFO_URL`: DevOps account lookup endpoint, default `https://devops.twalab.live/api/v2/theme-builder/account/info`
 - `HEYA_ACCOUNT_INFO_TOKEN`: token sent as the `token` header for account lookup
 - `HEYA_ACCOUNT_INFO_TIMEOUT`: timeout for account lookup requests, default `10s`
+- `HEYA_ACCOUNT_INFO_CACHE_TTL`: how long to cache successful account lookup responses per `projectUser`, default `10m`; set `0s` to disable
 - `HEYA_PROCESS_STOP_TIMEOUT`: how long to wait before force-killing the process group
 
 Check npm before using the API:

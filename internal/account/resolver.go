@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"heya-golang-microservice/internal/config"
@@ -18,6 +19,21 @@ type Resolver struct {
 	cfg    config.Config
 	client *http.Client
 	logger *slog.Logger
+	now    func() time.Time
+	mu     sync.Mutex
+	cache  map[string]cachedInfo
+	calls  map[string]*resolveCall
+}
+
+type cachedInfo struct {
+	info      ProjectInfo
+	expiresAt time.Time
+}
+
+type resolveCall struct {
+	done chan struct{}
+	info ProjectInfo
+	err  error
 }
 
 type ProjectInfo struct {
@@ -56,6 +72,9 @@ func NewResolver(cfg config.Config, logger *slog.Logger) *Resolver {
 			Timeout: timeout,
 		},
 		logger: logger,
+		now:    time.Now,
+		cache:  make(map[string]cachedInfo),
+		calls:  make(map[string]*resolveCall),
 	}
 }
 
@@ -74,6 +93,34 @@ func (r *Resolver) Resolve(ctx context.Context, projectUser string) (ProjectInfo
 		return ProjectInfo{}, config.ValidationError("HEYA_ACCOUNT_INFO_TOKEN is required when projectUser is used")
 	}
 
+	if info, ok := r.cached(projectUser); ok {
+		r.logInfo("account info cache hit", "projectUser", projectUser, "accountUsername", info.AccountUsername, "portDevLive", info.DevPort)
+		return info, nil
+	}
+
+	call, owner := r.resolveCall(projectUser)
+	if !owner {
+		select {
+		case <-ctx.Done():
+			return ProjectInfo{}, ctx.Err()
+		case <-call.done:
+			return call.info, call.err
+		}
+	}
+	defer func() {
+		r.finishResolveCall(projectUser, call)
+	}()
+
+	info, err := r.resolveRemote(ctx, projectUser, endpoint, token)
+	call.info = info
+	call.err = err
+	if err == nil {
+		r.store(projectUser, info)
+	}
+	return info, err
+}
+
+func (r *Resolver) resolveRemote(ctx context.Context, projectUser, endpoint, token string) (ProjectInfo, error) {
 	payload, err := json.Marshal(map[string]string{"account": projectUser})
 	if err != nil {
 		return ProjectInfo{}, fmt.Errorf("encode account info request: %w", err)
@@ -154,6 +201,73 @@ func (r *Resolver) Resolve(ctx context.Context, projectUser string) (ProjectInfo
 	)
 
 	return info, nil
+}
+
+func (r *Resolver) cached(projectUser string) (ProjectInfo, bool) {
+	ttl := r.cacheTTL()
+	if ttl <= 0 {
+		return ProjectInfo{}, false
+	}
+
+	now := r.currentTime()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	entry, ok := r.cache[projectUser]
+	if !ok {
+		return ProjectInfo{}, false
+	}
+	if !entry.expiresAt.After(now) {
+		delete(r.cache, projectUser)
+		return ProjectInfo{}, false
+	}
+	return entry.info, true
+}
+
+func (r *Resolver) store(projectUser string, info ProjectInfo) {
+	ttl := r.cacheTTL()
+	if ttl <= 0 {
+		return
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.cache[projectUser] = cachedInfo{
+		info:      info,
+		expiresAt: r.currentTime().Add(ttl),
+	}
+}
+
+func (r *Resolver) resolveCall(projectUser string) (*resolveCall, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if call := r.calls[projectUser]; call != nil {
+		return call, false
+	}
+	call := &resolveCall{done: make(chan struct{})}
+	r.calls[projectUser] = call
+	return call, true
+}
+
+func (r *Resolver) finishResolveCall(projectUser string, call *resolveCall) {
+	r.mu.Lock()
+	if r.calls[projectUser] == call {
+		delete(r.calls, projectUser)
+	}
+	r.mu.Unlock()
+	close(call.done)
+}
+
+func (r *Resolver) cacheTTL() time.Duration {
+	return r.cfg.AccountInfoCacheTTL
+}
+
+func (r *Resolver) currentTime() time.Time {
+	if r.now == nil {
+		return time.Now()
+	}
+	return r.now()
 }
 
 func (r *Resolver) logInfo(message string, args ...any) {
