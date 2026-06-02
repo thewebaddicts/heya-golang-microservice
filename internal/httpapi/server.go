@@ -651,7 +651,7 @@ func (s *Server) devRunProxyURLs(r *http.Request, projectUser, serverIP string) 
 		}, nil
 	}
 
-	appURL := strings.TrimSuffix(rootURL, "/") + appPath
+	appURL := devRunAppURL(rootURL, basePath, appPath)
 	if appQuery != "" {
 		appURL += "?" + appQuery
 	}
@@ -661,6 +661,34 @@ func (s *Server) devRunProxyURLs(r *http.Request, projectUser, serverIP string) 
 		BasePath: basePath,
 		IsTheme:  isTheme,
 	}, nil
+}
+
+func devRunAppURL(rootURL, basePath, appPath string) string {
+	if appPath == "" {
+		return rootURL
+	}
+
+	relativePath := appPath
+	basePath = normalizeProxyBasePath(basePath)
+	if basePath != "" {
+		basePathNoSlash := strings.TrimSuffix(basePath, "/")
+		switch {
+		case appPath == basePathNoSlash || appPath == basePath:
+			relativePath = ""
+		case strings.HasPrefix(appPath, basePath):
+			relativePath = strings.TrimPrefix(appPath, basePath)
+		case strings.HasPrefix(appPath, basePathNoSlash+"/"):
+			relativePath = strings.TrimPrefix(appPath, basePathNoSlash+"/")
+		}
+	}
+
+	if relativePath == "" {
+		return rootURL
+	}
+	if !strings.HasPrefix(relativePath, "/") {
+		relativePath = "/" + relativePath
+	}
+	return strings.TrimSuffix(rootURL, "/") + relativePath
 }
 
 func devProxyAppPathFromRequest(r *http.Request) (string, string, error) {

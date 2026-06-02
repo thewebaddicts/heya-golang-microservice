@@ -263,7 +263,7 @@ func TestDevRunWebSocketReturnsPreviewPathUnderProxy(t *testing.T) {
 	message := readWebSocketMessage(t, conn)
 
 	wantProxyRootURL := "https://91-98-82-198-heya-service.twalab.cloud/themes/57726969-9e2e-11ed-9f8e-42010a960004/z-6a1ef6c3dcca6/"
-	wantDevServerURL := wantProxyRootURL + "themes/57726969-9e2e-11ed-9f8e-42010a960004/z-6a1ef6c3dcca6?preview=true"
+	wantDevServerURL := wantProxyRootURL + "?preview=true"
 	if message.DevServerURL != wantDevServerURL {
 		t.Fatalf("devServerURL = %q, want %q", message.DevServerURL, wantDevServerURL)
 	}
@@ -321,12 +321,12 @@ func TestDevRunWebSocketRewritesPreviewURLUnderProxy(t *testing.T) {
 	defer conn.Close()
 	message := readWebSocketMessage(t, conn)
 
-	wantDevServerURL := "https://91-98-82-198-heya-service.twalab.cloud/themes/57726969-9e2e-11ed-9f8e-42010a960004/z-6a1ef6c3dcca6/themes/57726969-9e2e-11ed-9f8e-42010a960004/z-6a1ef6c3dcca6?preview=true"
+	wantDevServerURL := "https://91-98-82-198-heya-service.twalab.cloud/themes/57726969-9e2e-11ed-9f8e-42010a960004/z-6a1ef6c3dcca6/?preview=true"
 	if message.DevServerURL != wantDevServerURL {
 		t.Fatalf("devServerURL = %q, want %q", message.DevServerURL, wantDevServerURL)
 	}
-	if !strings.Contains(message.DevServerURL, "/themes/57726969-9e2e-11ed-9f8e-42010a960004/z-6a1ef6c3dcca6/themes/") {
-		t.Fatalf("devServerURL = %q, want route-native themes URL", message.DevServerURL)
+	if strings.Contains(message.DevServerURL, "/themes/57726969-9e2e-11ed-9f8e-42010a960004/z-6a1ef6c3dcca6/themes/") {
+		t.Fatalf("devServerURL = %q, want single theme base path", message.DevServerURL)
 	}
 }
 
@@ -1249,6 +1249,51 @@ func TestDevProxyAppPathFromPageURL(t *testing.T) {
 	}
 	if query != "path=%2F" {
 		t.Fatalf("query = %q, want path=%%2F", query)
+	}
+}
+
+func TestDevRunAppURLDoesNotDuplicateThemeBasePath(t *testing.T) {
+	rootURL := "https://91-98-82-198-heya-service.twalab.cloud/themes/57726969-9e2e-11ed-9f8e-42010a960004/z-6a1ef6c3dcca6/"
+	basePath := "/themes/57726969-9e2e-11ed-9f8e-42010a960004/z-6a1ef6c3dcca6/"
+
+	tests := []struct {
+		name    string
+		appPath string
+		want    string
+	}{
+		{
+			name:    "theme homepage without trailing slash",
+			appPath: "/themes/57726969-9e2e-11ed-9f8e-42010a960004/z-6a1ef6c3dcca6",
+			want:    rootURL,
+		},
+		{
+			name:    "theme homepage with trailing slash",
+			appPath: "/themes/57726969-9e2e-11ed-9f8e-42010a960004/z-6a1ef6c3dcca6/",
+			want:    rootURL,
+		},
+		{
+			name:    "nested theme route",
+			appPath: "/themes/57726969-9e2e-11ed-9f8e-42010a960004/z-6a1ef6c3dcca6/products",
+			want:    rootURL + "products",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := devRunAppURL(rootURL, basePath, tt.appPath)
+			if got != tt.want {
+				t.Fatalf("devRunAppURL() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDevRunAppURLPreservesNonBaseRelativeAppPath(t *testing.T) {
+	rootURL := "https://91-98-82-198-heya-service.twalab.cloud/dev/proxy/energy-user/"
+	got := devRunAppURL(rootURL, "/dev/proxy/energy-user/", "/settings")
+	want := "https://91-98-82-198-heya-service.twalab.cloud/dev/proxy/energy-user/settings"
+	if got != want {
+		t.Fatalf("devRunAppURL() = %q, want %q", got, want)
 	}
 }
 

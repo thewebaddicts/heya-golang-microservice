@@ -94,7 +94,7 @@ After the dev server responds over HTTP, the service sends a JSON message contai
 {
   "type": "dev_server",
   "status": "running",
-  "devServerURL": "https://91-98-82-198-heya-service.twalab.cloud/themes/57726969-9e2e-11ed-9f8e-42010a960004/z-6a1ef6c3dcca6/themes/57726969-9e2e-11ed-9f8e-42010a960004/z-6a1ef6c3dcca6?preview=true",
+  "devServerURL": "https://91-98-82-198-heya-service.twalab.cloud/themes/57726969-9e2e-11ed-9f8e-42010a960004/z-6a1ef6c3dcca6/?preview=true",
   "devProxyURL": "https://91-98-82-198-heya-service.twalab.cloud/themes/57726969-9e2e-11ed-9f8e-42010a960004/z-6a1ef6c3dcca6/",
   "connections": 1
 }
