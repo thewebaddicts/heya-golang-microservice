@@ -63,7 +63,7 @@ Header: token=<HEYA_ACCOUNT_INFO_TOKEN>
 Body: {"account":"<projectUser>"}
 ```
 
-It then uses `working_directory_heya` as the project directory, `account.port_dev_live` as the dev port, and `server_ip` as the host in the returned `devServerURL`.
+It then uses `working_directory_heya` as the project directory and `account.port_dev_live` as the dev port. For `projectUser` requests, the returned `devServerURL` points to the public microservice proxy URL, not the raw dev-server port.
 
 The old direct call still works as a fallback:
 
@@ -83,7 +83,8 @@ After the dev server responds over HTTP, the service sends a JSON message contai
 {
   "type": "dev_server",
   "status": "running",
-  "devServerURL": "http://91.98.82.198:12017",
+  "devServerURL": "https://91-98-82-198-heya-service.twalab.cloud/dev/proxy/energybri_6a19492405faf/",
+  "devProxyURL": "https://91-98-82-198-heya-service.twalab.cloud/dev/proxy/energybri_6a19492405faf/",
   "connections": 1
 }
 ```

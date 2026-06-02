@@ -126,7 +126,12 @@ func (s *Server) handleDevRunWebSocket(w http.ResponseWriter, r *http.Request) {
 		"run":          lease.Result,
 	}
 	if projectUser != "" {
-		payload["devProxyURL"] = s.absoluteDevProxyURL(r, projectUser)
+		proxyURL := s.absoluteDevProxyURL(r, projectUser, req.DevServerHost)
+		run := lease.Result
+		run.DevServerURL = proxyURL
+		payload["devServerURL"] = proxyURL
+		payload["devProxyURL"] = proxyURL
+		payload["run"] = run
 	}
 	if err := conn.WriteJSON(payload); err != nil {
 		return
@@ -317,8 +322,34 @@ func devProxyBasePath(projectUser string) string {
 	return "/dev/proxy/" + url.PathEscape(projectUser) + "/"
 }
 
-func (s *Server) absoluteDevProxyURL(r *http.Request, projectUser string) string {
-	return requestScheme(r) + "://" + r.Host + devProxyBasePath(projectUser)
+func (s *Server) absoluteDevProxyURL(r *http.Request, projectUser, serverIP string) string {
+	if host := devProxyHostFromServerIP(serverIP); host != "" {
+		return "https://" + host + devProxyBasePath(projectUser)
+	}
+	return requestScheme(r) + "://" + requestHost(r) + devProxyBasePath(projectUser)
+}
+
+func devProxyHostFromServerIP(serverIP string) string {
+	serverIP = strings.TrimSpace(serverIP)
+	if serverIP == "" {
+		return ""
+	}
+	ip := net.ParseIP(serverIP)
+	if ip == nil || ip.To4() == nil {
+		return ""
+	}
+	return strings.ReplaceAll(serverIP, ".", "-") + "-heya-service.twalab.cloud"
+}
+
+func requestHost(r *http.Request) string {
+	forwardedHost := strings.TrimSpace(r.Header.Get("X-Forwarded-Host"))
+	if forwardedHost != "" {
+		if comma := strings.Index(forwardedHost, ","); comma >= 0 {
+			forwardedHost = strings.TrimSpace(forwardedHost[:comma])
+		}
+		return forwardedHost
+	}
+	return r.Host
 }
 
 func requestScheme(r *http.Request) string {

@@ -189,14 +189,18 @@ func TestDevRunWebSocketResolvesProjectUser(t *testing.T) {
 	defer conn.Close()
 	message := readWebSocketMessage(t, conn)
 
-	if message.DevServerURL != "http://91.98.82.198:12017" {
-		t.Fatalf("devServerURL = %q, want %q", message.DevServerURL, "http://91.98.82.198:12017")
+	wantProxyURL := "https://91-98-82-198-heya-service.twalab.cloud/dev/proxy/energy-user/"
+	if message.DevServerURL != wantProxyURL {
+		t.Fatalf("devServerURL = %q, want %q", message.DevServerURL, wantProxyURL)
 	}
-	if message.DevProxyURL != testServer.URL+"/dev/proxy/energy-user/" {
-		t.Fatalf("devProxyURL = %q, want %q", message.DevProxyURL, testServer.URL+"/dev/proxy/energy-user/")
+	if message.DevProxyURL != wantProxyURL {
+		t.Fatalf("devProxyURL = %q, want %q", message.DevProxyURL, wantProxyURL)
 	}
 	if message.Run.DevServerBasePath != "/dev/proxy/energy-user/" {
 		t.Fatalf("run DevServerBasePath = %q, want %q", message.Run.DevServerBasePath, "/dev/proxy/energy-user/")
+	}
+	if message.Run.DevServerURL != wantProxyURL {
+		t.Fatalf("run DevServerURL = %q, want %q", message.Run.DevServerURL, wantProxyURL)
 	}
 	req := runner.lastRequest()
 	if req.ProjectPath != projectDir {
@@ -592,6 +596,14 @@ func TestWebSocketOriginValidation(t *testing.T) {
 	}
 }
 
+func TestDevProxyHostFromServerIP(t *testing.T) {
+	got := devProxyHostFromServerIP("91.98.82.198")
+	want := "91-98-82-198-heya-service.twalab.cloud"
+	if got != want {
+		t.Fatalf("devProxyHostFromServerIP() = %q, want %q", got, want)
+	}
+}
+
 func dialWebSocket(t *testing.T, url string) *websocket.Conn {
 	t.Helper()
 
@@ -626,6 +638,7 @@ func readWebSocketMessage(t *testing.T, conn *websocket.Conn) struct {
 	DevProxyURL  string `json:"devProxyURL"`
 	Connections  int    `json:"connections"`
 	Run          struct {
+		DevServerURL      string `json:"devServerURL"`
 		DevServerBasePath string `json:"devServerBasePath"`
 	} `json:"run"`
 } {
@@ -636,6 +649,7 @@ func readWebSocketMessage(t *testing.T, conn *websocket.Conn) struct {
 		DevProxyURL  string `json:"devProxyURL"`
 		Connections  int    `json:"connections"`
 		Run          struct {
+			DevServerURL      string `json:"devServerURL"`
 			DevServerBasePath string `json:"devServerBasePath"`
 		} `json:"run"`
 	}
