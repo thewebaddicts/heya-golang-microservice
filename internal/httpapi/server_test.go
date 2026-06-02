@@ -602,6 +602,111 @@ func TestThemeProxyProxiesRegisteredRouteToLocalDevServer(t *testing.T) {
 	}
 }
 
+func TestThemeProxyRewritesBuildAssetURLsAndStripsAssetBasePath(t *testing.T) {
+	baseDir := t.TempDir()
+	projectDir := filepath.Join(baseDir, "account", "storage", "app", "frontend")
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatalf("create project dir: %v", err)
+	}
+
+	var upstreamPath string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamPath = r.URL.Path
+		switch r.URL.Path {
+		case "/themes/57726969-9e2e-11ed-9f8e-42010a960004/z-6a1ef6c3dcca6/":
+			w.Header().Set("Content-Type", "text/html")
+			_, _ = w.Write([]byte(`<script type="module" src="/_build/@vite/client"></script><script type="module" src="/_build/@fs/app/src/entry-client.tsx"></script>`))
+		case "/_build/@vite/client":
+			w.Header().Set("Content-Type", "application/javascript")
+			_, _ = w.Write([]byte(`import "/_build/chunk.js"; console.log("/_build/ping")`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+	upstreamPort := serverPort(t, upstream.URL)
+
+	accountServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"account": map[string]any{
+				"id":            257,
+				"uuid":          "account-uuid",
+				"username":      "energy-user",
+				"label":         "Energy Bridge",
+				"port_dev_live": upstreamPort,
+			},
+			"server_ip":              "91.98.82.198",
+			"working_directory":      filepath.Dir(filepath.Dir(filepath.Dir(projectDir))),
+			"working_directory_heya": projectDir,
+		})
+	}))
+	defer accountServer.Close()
+
+	runner := &fakeRunner{}
+	server := NewServer(config.Config{
+		ProjectBaseDir:     baseDir,
+		DefaultProjectDir:  projectDir,
+		DefaultDevPort:     3002,
+		DevReadyHost:       "127.0.0.1",
+		DevIdleTimeout:     time.Second,
+		ProcessStopTimeout: time.Second,
+		AccountInfoURL:     accountServer.URL,
+		AccountInfoToken:   "test-token",
+		AccountInfoTimeout: time.Second,
+	}, runner, slog.Default())
+	testServer := httptest.NewServer(server.Routes())
+	defer testServer.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(testServer.URL, "http") + "/dev/run?projectUser=energy-user&previewPath=%2Fthemes%2F57726969-9e2e-11ed-9f8e-42010a960004%2Fz-6a1ef6c3dcca6%2F&preview=true"
+	conn := dialWebSocket(t, wsURL)
+	defer conn.Close()
+	_ = readWebSocketMessage(t, conn)
+
+	reqHTML, err := http.NewRequest(http.MethodGet, testServer.URL+"/themes/57726969-9e2e-11ed-9f8e-42010a960004/z-6a1ef6c3dcca6/", nil)
+	if err != nil {
+		t.Fatalf("create theme HTML request: %v", err)
+	}
+	reqHTML.Host = "91-98-82-198-heya-service.twalab.cloud"
+	respHTML, err := http.DefaultClient.Do(reqHTML)
+	if err != nil {
+		t.Fatalf("GET theme HTML: %v", err)
+	}
+	defer respHTML.Body.Close()
+	htmlBody, err := io.ReadAll(respHTML.Body)
+	if err != nil {
+		t.Fatalf("read HTML body: %v", err)
+	}
+	html := string(htmlBody)
+	if !strings.Contains(html, `src="/themes/57726969-9e2e-11ed-9f8e-42010a960004/z-6a1ef6c3dcca6/_build/@vite/client"`) {
+		t.Fatalf("HTML did not rewrite vite client asset URL: %s", html)
+	}
+	if !strings.Contains(html, `src="/themes/57726969-9e2e-11ed-9f8e-42010a960004/z-6a1ef6c3dcca6/_build/@fs/app/src/entry-client.tsx"`) {
+		t.Fatalf("HTML did not rewrite entry client asset URL: %s", html)
+	}
+
+	reqJS, err := http.NewRequest(http.MethodGet, testServer.URL+"/themes/57726969-9e2e-11ed-9f8e-42010a960004/z-6a1ef6c3dcca6/_build/@vite/client", nil)
+	if err != nil {
+		t.Fatalf("create theme JS request: %v", err)
+	}
+	reqJS.Host = "91-98-82-198-heya-service.twalab.cloud"
+	respJS, err := http.DefaultClient.Do(reqJS)
+	if err != nil {
+		t.Fatalf("GET theme JS: %v", err)
+	}
+	defer respJS.Body.Close()
+	jsBody, err := io.ReadAll(respJS.Body)
+	if err != nil {
+		t.Fatalf("read JS body: %v", err)
+	}
+	if upstreamPath != "/_build/@vite/client" {
+		t.Fatalf("upstream path = %q, want %q", upstreamPath, "/_build/@vite/client")
+	}
+	js := string(jsBody)
+	if !strings.Contains(js, `"/themes/57726969-9e2e-11ed-9f8e-42010a960004/z-6a1ef6c3dcca6/_build/chunk.js"`) {
+		t.Fatalf("JS did not rewrite nested build asset URL: %s", js)
+	}
+}
+
 func TestDevRunWebSocketRejectsThemeProxyConflict(t *testing.T) {
 	baseDir := t.TempDir()
 	projectDirOne := filepath.Join(baseDir, "account-one", "storage", "app", "frontend")

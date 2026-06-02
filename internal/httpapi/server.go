@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -272,7 +273,7 @@ func (s *Server) handleThemeProxy(w http.ResponseWriter, r *http.Request) {
 		"upstreamPath", r.URL.Path,
 	)
 
-	s.proxyDevServer(w, r, route.Request, route.ProjectUser, r.URL.Path, r.URL.RawQuery)
+	s.proxyDevServer(w, r, route.Request, route.ProjectUser, devProxyUpstreamPath(basePath, r.URL.Path), r.URL.RawQuery)
 }
 
 func (s *Server) proxyDevServer(w http.ResponseWriter, r *http.Request, req dev.RunRequest, projectUser, upstreamPath, upstreamQuery string) {
@@ -317,7 +318,106 @@ func (s *Server) proxyDevServer(w http.ResponseWriter, r *http.Request, req dev.
 		)
 		writeError(rw, http.StatusBadGateway, "dev proxy request failed")
 	}
+	proxy.ModifyResponse = func(resp *http.Response) error {
+		if resp.StatusCode >= http.StatusBadRequest {
+			s.logger.Warn("dev proxy upstream returned error",
+				"projectUser", projectUser,
+				"target", target.String(),
+				"path", resp.Request.URL.Path,
+				"status", resp.StatusCode,
+			)
+		}
+		return rewriteDevProxyResponse(resp, req.DevServerBasePath)
+	}
 	proxy.ServeHTTP(w, r)
+}
+
+func devProxyUpstreamPath(basePath, requestPath string) string {
+	basePath = normalizeProxyBasePath(basePath)
+	if basePath == "" {
+		return requestPath
+	}
+
+	for _, assetPath := range []string{
+		"_build/",
+	} {
+		fullPath := basePath + assetPath
+		if requestPath == strings.TrimSuffix(fullPath, "/") || strings.HasPrefix(requestPath, fullPath) {
+			return "/" + strings.TrimPrefix(requestPath, basePath)
+		}
+	}
+	return requestPath
+}
+
+func rewriteDevProxyResponse(resp *http.Response, basePath string) error {
+	basePath = normalizeProxyBasePath(basePath)
+	if basePath == "" || resp.StatusCode == http.StatusSwitchingProtocols || resp.Body == nil {
+		return nil
+	}
+	if !isRewritableDevProxyContent(resp.Header.Get("Content-Type")) {
+		return nil
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	_ = resp.Body.Close()
+
+	rewritten := rewriteDevProxyBody(body, basePath)
+	resp.Body = io.NopCloser(bytes.NewReader(rewritten))
+	resp.ContentLength = int64(len(rewritten))
+	resp.Header.Set("Content-Length", strconv.Itoa(len(rewritten)))
+	if !bytes.Equal(body, rewritten) {
+		resp.Header.Del("ETag")
+	}
+	return nil
+}
+
+func isRewritableDevProxyContent(contentType string) bool {
+	contentType = strings.ToLower(strings.TrimSpace(contentType))
+	return strings.HasPrefix(contentType, "text/html") ||
+		strings.HasPrefix(contentType, "text/css") ||
+		strings.Contains(contentType, "javascript")
+}
+
+func rewriteDevProxyBody(body []byte, basePath string) []byte {
+	basePath = normalizeProxyBasePath(basePath)
+	if basePath == "" {
+		return body
+	}
+
+	rewritten := append([]byte(nil), body...)
+	for _, pathPrefix := range []string{
+		"/_build/",
+		"/@vite/",
+		"/@react-refresh",
+		"/node_modules/.vite/",
+	} {
+		rewritten = rewriteAbsoluteDevProxyPath(rewritten, pathPrefix, strings.TrimSuffix(basePath, "/")+pathPrefix)
+	}
+	return rewritten
+}
+
+func rewriteAbsoluteDevProxyPath(body []byte, fromPath, toPath string) []byte {
+	for _, delimiter := range []string{`"`, `'`, `(`, `url(`, `\"`, `\'`} {
+		body = bytes.ReplaceAll(body, []byte(delimiter+fromPath), []byte(delimiter+toPath))
+	}
+	return body
+}
+
+func normalizeProxyBasePath(basePath string) string {
+	basePath = strings.TrimSpace(basePath)
+	if basePath == "" || basePath == "/" {
+		return ""
+	}
+	if !strings.HasPrefix(basePath, "/") {
+		basePath = "/" + basePath
+	}
+	if !strings.HasSuffix(basePath, "/") {
+		basePath += "/"
+	}
+	return basePath
 }
 
 func (s *Server) devProxyRequest(r *http.Request) (dev.RunRequest, string, string, string, string, error) {
