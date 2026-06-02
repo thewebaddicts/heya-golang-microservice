@@ -610,8 +610,10 @@ func TestThemeProxyRewritesBuildAssetURLsAndStripsAssetBasePath(t *testing.T) {
 	}
 
 	var upstreamPath string
+	var upstreamQuery string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		upstreamPath = r.URL.Path
+		upstreamQuery = r.URL.RawQuery
 		switch r.URL.Path {
 		case "/themes/57726969-9e2e-11ed-9f8e-42010a960004/z-6a1ef6c3dcca6/":
 			w.Header().Set("Content-Type", "text/html")
@@ -619,6 +621,9 @@ func TestThemeProxyRewritesBuildAssetURLsAndStripsAssetBasePath(t *testing.T) {
 		case "/_build/@vite/client":
 			w.Header().Set("Content-Type", "application/javascript")
 			_, _ = w.Write([]byte("import \"/_build/chunk.js\"; import.meta.env = {\"BASE_URL\":\"/_build\"}; const api = `/api/theme-page/by-file`; const hmrPort = 38123;"))
+		case "/_build/@fs/home/energy-user/app/src/routes/themes/57726969-9e2e-11ed-9f8e-42010a960004/z-6a1ef6c3dcca6/index.tsx":
+			w.Header().Set("Content-Type", "application/javascript")
+			_, _ = w.Write([]byte(`export default function Page() {}`))
 		case "/api/theme-page/by-file":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"ok":true}`))
@@ -730,6 +735,41 @@ func TestThemeProxyRewritesBuildAssetURLsAndStripsAssetBasePath(t *testing.T) {
 	defer respAPI.Body.Close()
 	if upstreamPath != "/api/theme-page/by-file" {
 		t.Fatalf("upstream path = %q, want %q", upstreamPath, "/api/theme-page/by-file")
+	}
+
+	reqRootBuild, err := http.NewRequest(http.MethodGet, testServer.URL+"/_build/@fs/home/energy-user/app/src/routes/themes/57726969-9e2e-11ed-9f8e-42010a960004/z-6a1ef6c3dcca6/index.tsx?import&pick=default&pick=$css", nil)
+	if err != nil {
+		t.Fatalf("create root build request: %v", err)
+	}
+	reqRootBuild.Host = "91-98-82-198-heya-service.twalab.cloud"
+	reqRootBuild.Header.Set("Referer", "https://91-98-82-198-heya-service.twalab.cloud/themes/57726969-9e2e-11ed-9f8e-42010a960004/z-6a1ef6c3dcca6?preview=true")
+	respRootBuild, err := http.DefaultClient.Do(reqRootBuild)
+	if err != nil {
+		t.Fatalf("GET root build request: %v", err)
+	}
+	defer respRootBuild.Body.Close()
+	if respRootBuild.StatusCode != http.StatusOK {
+		t.Fatalf("root build status = %d, want %d", respRootBuild.StatusCode, http.StatusOK)
+	}
+	if upstreamPath != "/_build/@fs/home/energy-user/app/src/routes/themes/57726969-9e2e-11ed-9f8e-42010a960004/z-6a1ef6c3dcca6/index.tsx" {
+		t.Fatalf("upstream path = %q, want root build path", upstreamPath)
+	}
+	if upstreamQuery != "import&pick=default&pick=$css" {
+		t.Fatalf("upstream query = %q, want root build query", upstreamQuery)
+	}
+
+	reqRootBuildNoReferer, err := http.NewRequest(http.MethodGet, testServer.URL+"/_build/@vite/client", nil)
+	if err != nil {
+		t.Fatalf("create root build no-referer request: %v", err)
+	}
+	reqRootBuildNoReferer.Host = "91-98-82-198-heya-service.twalab.cloud"
+	respRootBuildNoReferer, err := http.DefaultClient.Do(reqRootBuildNoReferer)
+	if err != nil {
+		t.Fatalf("GET root build no-referer request: %v", err)
+	}
+	defer respRootBuildNoReferer.Body.Close()
+	if respRootBuildNoReferer.StatusCode != http.StatusOK {
+		t.Fatalf("root build no-referer status = %d, want %d", respRootBuildNoReferer.StatusCode, http.StatusOK)
 	}
 }
 

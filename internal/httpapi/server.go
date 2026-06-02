@@ -65,6 +65,8 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /build/run", s.handleBuildRunWebSocket)
 	mux.HandleFunc("/dev/proxy", s.handleDevProxy)
 	mux.HandleFunc("/dev/proxy/", s.handleDevProxy)
+	mux.HandleFunc("/_build/", s.handleThemeRootProxy)
+	mux.HandleFunc("/api/theme-page/", s.handleThemeRootProxy)
 	mux.HandleFunc("/themes/", s.handleThemeProxy)
 	return mux
 }
@@ -277,6 +279,30 @@ func (s *Server) handleThemeProxy(w http.ResponseWriter, r *http.Request) {
 	)
 
 	s.proxyDevServer(w, r, route.Request, route.ProjectUser, devProxyUpstreamPath(basePath, r.URL.Path), r.URL.RawQuery)
+}
+
+func (s *Server) handleThemeRootProxy(w http.ResponseWriter, r *http.Request) {
+	if websocket.IsWebSocketUpgrade(r) && !s.isAllowedWebSocketOrigin(r) {
+		writeError(w, http.StatusForbidden, "websocket origin is not allowed")
+		return
+	}
+
+	route, basePath, ok := s.themeProxyRouteForRootRequest(r)
+	if !ok {
+		writeError(w, http.StatusNotFound, "theme proxy route is not registered")
+		return
+	}
+
+	s.logger.Info("received theme root proxy request",
+		"projectUser", route.ProjectUser,
+		"projectPath", route.Request.ProjectPath,
+		"port", route.Request.Port,
+		"basePath", basePath,
+		"upstreamPath", r.URL.Path,
+		"referer", r.Header.Get("Referer"),
+	)
+
+	s.proxyDevServer(w, r, route.Request, route.ProjectUser, r.URL.Path, r.URL.RawQuery)
 }
 
 func (s *Server) proxyDevServer(w http.ResponseWriter, r *http.Request, req dev.RunRequest, projectUser, upstreamPath, upstreamQuery string) {
@@ -567,6 +593,26 @@ func (s *Server) themeProxyRouteForPath(requestPath string) (themeProxyRoute, st
 	route, ok := s.themeProxyRoutes[basePath]
 	s.themeProxyMu.RUnlock()
 	return route, basePath, ok
+}
+
+func (s *Server) themeProxyRouteForRootRequest(r *http.Request) (themeProxyRoute, string, bool) {
+	if referer := strings.TrimSpace(r.Header.Get("Referer")); referer != "" {
+		if refererURL, err := url.Parse(referer); err == nil {
+			if route, basePath, ok := s.themeProxyRouteForPath(refererURL.EscapedPath()); ok {
+				return route, basePath, true
+			}
+		}
+	}
+
+	s.themeProxyMu.RLock()
+	defer s.themeProxyMu.RUnlock()
+	if len(s.themeProxyRoutes) != 1 {
+		return themeProxyRoute{}, "", false
+	}
+	for basePath, route := range s.themeProxyRoutes {
+		return route, basePath, true
+	}
+	return themeProxyRoute{}, "", false
 }
 
 func (s *Server) devRunProxyURLs(r *http.Request, projectUser, serverIP string) (devRunProxyURLs, error) {
