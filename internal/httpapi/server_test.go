@@ -618,7 +618,10 @@ func TestThemeProxyRewritesBuildAssetURLsAndStripsAssetBasePath(t *testing.T) {
 			_, _ = w.Write([]byte(`<script type="module" src="/_build/@vite/client"></script><script type="module" src="/_build/@fs/app/src/entry-client.tsx"></script>`))
 		case "/_build/@vite/client":
 			w.Header().Set("Content-Type", "application/javascript")
-			_, _ = w.Write([]byte(`import "/_build/chunk.js"; console.log("/_build/ping")`))
+			_, _ = w.Write([]byte("import \"/_build/chunk.js\"; import.meta.env = {\"BASE_URL\":\"/_build\"}; const api = `/api/theme-page/by-file`; const hmrPort = 38123;"))
+		case "/api/theme-page/by-file":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ok":true}`))
 		default:
 			http.NotFound(w, r)
 		}
@@ -704,6 +707,29 @@ func TestThemeProxyRewritesBuildAssetURLsAndStripsAssetBasePath(t *testing.T) {
 	js := string(jsBody)
 	if !strings.Contains(js, `"/themes/57726969-9e2e-11ed-9f8e-42010a960004/z-6a1ef6c3dcca6/_build/chunk.js"`) {
 		t.Fatalf("JS did not rewrite nested build asset URL: %s", js)
+	}
+	if !strings.Contains(js, `"BASE_URL":"/themes/57726969-9e2e-11ed-9f8e-42010a960004/z-6a1ef6c3dcca6/_build"`) {
+		t.Fatalf("JS did not rewrite exact build base URL: %s", js)
+	}
+	if !strings.Contains(js, "`/themes/57726969-9e2e-11ed-9f8e-42010a960004/z-6a1ef6c3dcca6/api/theme-page/by-file`") {
+		t.Fatalf("JS did not rewrite backtick theme API URL: %s", js)
+	}
+	if !strings.Contains(js, `const hmrPort = importMetaUrl.port || (importMetaUrl.protocol === "https:" ? 443 : 80);`) {
+		t.Fatalf("JS did not rewrite Vite HMR port: %s", js)
+	}
+
+	reqAPI, err := http.NewRequest(http.MethodGet, testServer.URL+"/themes/57726969-9e2e-11ed-9f8e-42010a960004/z-6a1ef6c3dcca6/api/theme-page/by-file", nil)
+	if err != nil {
+		t.Fatalf("create theme API request: %v", err)
+	}
+	reqAPI.Host = "91-98-82-198-heya-service.twalab.cloud"
+	respAPI, err := http.DefaultClient.Do(reqAPI)
+	if err != nil {
+		t.Fatalf("GET theme API: %v", err)
+	}
+	defer respAPI.Body.Close()
+	if upstreamPath != "/api/theme-page/by-file" {
+		t.Fatalf("upstream path = %q, want %q", upstreamPath, "/api/theme-page/by-file")
 	}
 }
 

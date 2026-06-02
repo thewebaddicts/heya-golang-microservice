@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -43,6 +44,8 @@ type devRunProxyURLs struct {
 	BasePath string
 	IsTheme  bool
 }
+
+var viteHMRPortPattern = regexp.MustCompile(`const hmrPort = \d+;`)
 
 func NewServer(cfg config.Config, runner dev.Runner, logger *slog.Logger) *Server {
 	return &Server{
@@ -340,6 +343,7 @@ func devProxyUpstreamPath(basePath, requestPath string) string {
 
 	for _, assetPath := range []string{
 		"_build/",
+		"api/theme-page/",
 	} {
 		fullPath := basePath + assetPath
 		if requestPath == strings.TrimSuffix(fullPath, "/") || strings.HasPrefix(requestPath, fullPath) {
@@ -389,21 +393,27 @@ func rewriteDevProxyBody(body []byte, basePath string) []byte {
 
 	rewritten := append([]byte(nil), body...)
 	for _, pathPrefix := range []string{
-		"/_build/",
+		"/_build",
 		"/@vite/",
 		"/@react-refresh",
 		"/node_modules/.vite/",
+		"/api/theme-page/",
 	} {
 		rewritten = rewriteAbsoluteDevProxyPath(rewritten, pathPrefix, strings.TrimSuffix(basePath, "/")+pathPrefix)
 	}
+	rewritten = rewriteViteHMRPort(rewritten)
 	return rewritten
 }
 
 func rewriteAbsoluteDevProxyPath(body []byte, fromPath, toPath string) []byte {
-	for _, delimiter := range []string{`"`, `'`, `(`, `url(`, `\"`, `\'`} {
+	for _, delimiter := range []string{"`", `"`, `'`, `(`, `url(`, `\"`, `\'`} {
 		body = bytes.ReplaceAll(body, []byte(delimiter+fromPath), []byte(delimiter+toPath))
 	}
 	return body
+}
+
+func rewriteViteHMRPort(body []byte) []byte {
+	return viteHMRPortPattern.ReplaceAll(body, []byte(`const hmrPort = importMetaUrl.port || (importMetaUrl.protocol === "https:" ? 443 : 80);`))
 }
 
 func normalizeProxyBasePath(basePath string) string {
