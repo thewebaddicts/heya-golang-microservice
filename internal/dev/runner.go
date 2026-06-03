@@ -54,11 +54,7 @@ type LocalRunner struct {
 	logger *slog.Logger
 }
 
-var viteProxyOptimizeDepsInclude = []string{
-	"lucide-solid",
-	"lucide-solid/icons/chevron-left",
-	"lucide-solid/icons/chevron-right",
-}
+var viteProxyOptimizeDepsInclude = []string{}
 
 func NewLocalRunner(cfg config.Config, logger *slog.Logger) *LocalRunner {
 	return &LocalRunner{cfg: cfg, logger: logger}
@@ -376,7 +372,7 @@ func (r *LocalRunner) writeViteProxyConfig(projectDir, publicHost, basePath stri
 	}
 
 	configFile := filepath.Join(configDir, proxyConfigFileName(projectDir, startedAt))
-	source := viteProxyConfigSource(findViteConfig(projectDir), publicHost, basePath)
+	source := viteProxyConfigSource(findViteConfig(projectDir), publicHost, basePath, lucideCompatModulePath(projectDir))
 	if err := os.WriteFile(configFile, []byte(source), 0o644); err != nil {
 		return "", fmt.Errorf("write vite proxy config: %w", err)
 	}
@@ -409,7 +405,15 @@ func findViteConfig(projectDir string) string {
 	return ""
 }
 
-func viteProxyConfigSource(originalConfigPath, publicHost, basePath string) string {
+func lucideCompatModulePath(projectDir string) string {
+	path := filepath.Join(projectDir, "src", "lib", "lucide-solid-compat.ts")
+	if info, err := os.Stat(path); err == nil && !info.IsDir() {
+		return path
+	}
+	return ""
+}
+
+func viteProxyConfigSource(originalConfigPath, publicHost, basePath, lucideCompatPath string) string {
 	basePath = normalizeDevServerBasePath(basePath)
 	hmrPath := basePath + "__vite_hmr"
 	if basePath == "" {
@@ -423,6 +427,8 @@ func viteProxyConfigSource(originalConfigPath, publicHost, basePath string) stri
 	builder.WriteString(jsString(hmrPath))
 	builder.WriteString("\nconst proxyOptimizeDepsInclude = ")
 	builder.WriteString(jsStringArray(viteProxyOptimizeDepsInclude))
+	builder.WriteString("\nconst proxyLucideCompatModule = ")
+	builder.WriteString(jsString(strings.TrimSpace(lucideCompatPath)))
 	builder.WriteString("\n")
 	if originalConfigPath != "" {
 		builder.WriteString("import originalConfigModule from ")
@@ -432,6 +438,35 @@ func viteProxyConfigSource(originalConfigPath, publicHost, basePath string) stri
 		builder.WriteString("const originalConfig = {}\n")
 	}
 	builder.WriteString(`
+function normalizeProxyAliasEntries(alias) {
+  if (Array.isArray(alias)) return alias
+  if (alias && typeof alias === "object") {
+    return Object.entries(alias).map(([find, replacement]) => ({ find, replacement }))
+  }
+  return []
+}
+
+function mergeProxyAlias(alias) {
+  if (!proxyLucideCompatModule) return alias
+  const aliases = normalizeProxyAliasEntries(alias).filter((entry) => {
+    const find = entry && entry.find
+    return !(typeof find === "string" && find === "lucide-solid")
+  })
+  return [
+    { find: /^lucide-solid$/, replacement: proxyLucideCompatModule },
+    ...aliases,
+  ]
+}
+
+function mergeProxyResolve(configResolve) {
+  const resolve = configResolve && typeof configResolve === "object" ? configResolve : {}
+  if (!proxyLucideCompatModule) return resolve
+  return {
+    ...resolve,
+    alias: mergeProxyAlias(resolve.alias),
+  }
+}
+
 function mergeProxyOptimizeDeps(configOptimizeDeps) {
   const optimizeDeps = configOptimizeDeps && typeof configOptimizeDeps === "object" ? configOptimizeDeps : {}
   const include = Array.isArray(optimizeDeps.include) ? optimizeDeps.include : []
@@ -446,6 +481,8 @@ function mergeProxyConfig(config) {
   const server = baseConfig.server && typeof baseConfig.server === "object" ? baseConfig.server : {}
   const vite = baseConfig.vite && typeof baseConfig.vite === "object" ? baseConfig.vite : {}
   const hasNestedViteConfig = Object.keys(vite).length > 0
+  const resolve = mergeProxyResolve(baseConfig.resolve)
+  const viteResolve = mergeProxyResolve(vite.resolve)
   const optimizeDeps = mergeProxyOptimizeDeps(baseConfig.optimizeDeps)
   const viteOptimizeDeps = mergeProxyOptimizeDeps(vite.optimizeDeps)
   let allowedHosts = server.allowedHosts
@@ -475,10 +512,11 @@ function mergeProxyConfig(config) {
       ? {
           vite: {
             ...vite,
+            resolve: viteResolve,
             optimizeDeps: viteOptimizeDeps,
           },
         }
-      : { optimizeDeps }),
+      : { resolve, optimizeDeps }),
   }
 }
 

@@ -73,15 +73,23 @@ func TestDevServerEnvironmentAddsViteAllowedHost(t *testing.T) {
 }
 
 func TestViteProxyConfigSourceMergesAllowedHostAndHMR(t *testing.T) {
-	got := viteProxyConfigSource("/srv/app/vite.config.ts", "91-98-82-198-heya-service.twalab.cloud", "/themes/store/install/")
+	got := viteProxyConfigSource(
+		"/srv/app/vite.config.ts",
+		"91-98-82-198-heya-service.twalab.cloud",
+		"/themes/store/install/",
+		"/srv/app/src/lib/lucide-solid-compat.ts",
+	)
 	for _, want := range []string{
 		`import originalConfigModule from "file:///srv/app/vite.config.ts"`,
 		`const proxyAllowedHost = "91-98-82-198-heya-service.twalab.cloud"`,
 		`const proxyHMRPath = "/themes/store/install/__vite_hmr"`,
+		`const proxyLucideCompatModule = "/srv/app/src/lib/lucide-solid-compat.ts"`,
 		`allowedHosts = Array.from(new Set([...hostList, proxyAllowedHost]))`,
 		`protocol: "wss"`,
 		`clientPort: 443`,
-		`const proxyOptimizeDepsInclude = ["lucide-solid","lucide-solid/icons/chevron-left","lucide-solid/icons/chevron-right"]`,
+		`const proxyOptimizeDepsInclude = []`,
+		`{ find: /^lucide-solid$/, replacement: proxyLucideCompatModule }`,
+		`const viteResolve = mergeProxyResolve(vite.resolve)`,
 		`const viteOptimizeDeps = mergeProxyOptimizeDeps(vite.optimizeDeps)`,
 		`include: Array.from(new Set([...include, ...proxyOptimizeDepsInclude]))`,
 	} {
