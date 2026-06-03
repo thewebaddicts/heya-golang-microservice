@@ -617,7 +617,7 @@ func TestThemeProxyRewritesBuildAssetURLsAndStripsAssetBasePath(t *testing.T) {
 		switch r.URL.Path {
 		case "/themes/57726969-9e2e-11ed-9f8e-42010a960004/z-6a1ef6c3dcca6/":
 			w.Header().Set("Content-Type", "text/html")
-			_, _ = w.Write([]byte(`<script type="module" src="/_build/@vite/client"></script><script type="module" src="/_build/@fs/app/src/entry-client.tsx"></script>`))
+			_, _ = w.Write([]byte(`<link rel="stylesheet" href="/api/theme-styles?themeUuid=57726969-9e2e-11ed-9f8e-42010a960004&installationId=z-6a1ef6c3dcca6&v=123"><script type="module" src="/_build/@vite/client"></script><script type="module" src="/_build/@fs/app/src/entry-client.tsx"></script>`))
 		case "/_build/@vite/client":
 			w.Header().Set("Content-Type", "application/javascript")
 			_, _ = w.Write([]byte("import \"/_build/chunk.js\"; import.meta.env = {\"BASE_URL\":\"/_build\"}; const api = `/api/theme-page/by-file`; const hmrPort = 38123;"))
@@ -627,6 +627,9 @@ func TestThemeProxyRewritesBuildAssetURLsAndStripsAssetBasePath(t *testing.T) {
 		case "/api/theme-page/by-file":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"ok":true}`))
+		case "/api/theme-styles":
+			w.Header().Set("Content-Type", "text/css")
+			_, _ = w.Write([]byte(`body{color:red}`))
 		case "/api/theme-watch/version":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"version":1}`))
@@ -694,6 +697,9 @@ func TestThemeProxyRewritesBuildAssetURLsAndStripsAssetBasePath(t *testing.T) {
 	if !strings.Contains(html, `src="/themes/57726969-9e2e-11ed-9f8e-42010a960004/z-6a1ef6c3dcca6/_build/@fs/app/src/entry-client.tsx"`) {
 		t.Fatalf("HTML did not rewrite entry client asset URL: %s", html)
 	}
+	if !strings.Contains(html, `href="/themes/57726969-9e2e-11ed-9f8e-42010a960004/z-6a1ef6c3dcca6/api/theme-styles?themeUuid=57726969-9e2e-11ed-9f8e-42010a960004&installationId=z-6a1ef6c3dcca6&v=123"`) {
+		t.Fatalf("HTML did not rewrite theme stylesheet URL: %s", html)
+	}
 
 	reqJS, err := http.NewRequest(http.MethodGet, testServer.URL+"/themes/57726969-9e2e-11ed-9f8e-42010a960004/z-6a1ef6c3dcca6/_build/@vite/client", nil)
 	if err != nil {
@@ -738,6 +744,23 @@ func TestThemeProxyRewritesBuildAssetURLsAndStripsAssetBasePath(t *testing.T) {
 	defer respAPI.Body.Close()
 	if upstreamPath != "/api/theme-page/by-file" {
 		t.Fatalf("upstream path = %q, want %q", upstreamPath, "/api/theme-page/by-file")
+	}
+
+	reqStyles, err := http.NewRequest(http.MethodGet, testServer.URL+"/themes/57726969-9e2e-11ed-9f8e-42010a960004/z-6a1ef6c3dcca6/api/theme-styles?themeUuid=57726969-9e2e-11ed-9f8e-42010a960004&installationId=z-6a1ef6c3dcca6&v=123", nil)
+	if err != nil {
+		t.Fatalf("create theme styles request: %v", err)
+	}
+	reqStyles.Host = "91-98-82-198-heya-service.twalab.cloud"
+	respStyles, err := http.DefaultClient.Do(reqStyles)
+	if err != nil {
+		t.Fatalf("GET theme styles: %v", err)
+	}
+	defer respStyles.Body.Close()
+	if upstreamPath != "/api/theme-styles" {
+		t.Fatalf("upstream path = %q, want %q", upstreamPath, "/api/theme-styles")
+	}
+	if upstreamQuery != "themeUuid=57726969-9e2e-11ed-9f8e-42010a960004&installationId=z-6a1ef6c3dcca6&v=123" {
+		t.Fatalf("upstream query = %q, want theme styles query", upstreamQuery)
 	}
 
 	reqWatchAPI, err := http.NewRequest(http.MethodGet, testServer.URL+"/themes/57726969-9e2e-11ed-9f8e-42010a960004/z-6a1ef6c3dcca6/api/theme-watch/version?themeUuid=57726969-9e2e-11ed-9f8e-42010a960004&installationId=z-6a1ef6c3dcca6&_=1780438674941", nil)
@@ -808,6 +831,24 @@ func TestThemeProxyRewritesBuildAssetURLsAndStripsAssetBasePath(t *testing.T) {
 	}
 	if upstreamPath != "/api/theme-watch/version" {
 		t.Fatalf("upstream path = %q, want %q", upstreamPath, "/api/theme-watch/version")
+	}
+
+	reqRootStyles, err := http.NewRequest(http.MethodGet, testServer.URL+"/api/theme-styles?themeUuid=57726969-9e2e-11ed-9f8e-42010a960004&installationId=z-6a1ef6c3dcca6&v=123", nil)
+	if err != nil {
+		t.Fatalf("create root theme styles request: %v", err)
+	}
+	reqRootStyles.Host = "91-98-82-198-heya-service.twalab.cloud"
+	reqRootStyles.Header.Set("Referer", "https://91-98-82-198-heya-service.twalab.cloud/themes/57726969-9e2e-11ed-9f8e-42010a960004/z-6a1ef6c3dcca6?preview=true")
+	respRootStyles, err := http.DefaultClient.Do(reqRootStyles)
+	if err != nil {
+		t.Fatalf("GET root theme styles request: %v", err)
+	}
+	defer respRootStyles.Body.Close()
+	if respRootStyles.StatusCode != http.StatusOK {
+		t.Fatalf("root theme styles status = %d, want %d", respRootStyles.StatusCode, http.StatusOK)
+	}
+	if upstreamPath != "/api/theme-styles" {
+		t.Fatalf("upstream path = %q, want %q", upstreamPath, "/api/theme-styles")
 	}
 }
 

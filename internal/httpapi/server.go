@@ -67,6 +67,8 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/dev/proxy/", s.handleDevProxy)
 	mux.HandleFunc("/_build/", s.handleThemeRootProxy)
 	mux.HandleFunc("/api/theme-page/", s.handleThemeRootProxy)
+	mux.HandleFunc("/api/theme-styles", s.handleThemeRootProxy)
+	mux.HandleFunc("/api/theme-styles/", s.handleThemeRootProxy)
 	mux.HandleFunc("/api/theme-watch/", s.handleThemeRootProxy)
 	mux.HandleFunc("/themes/", s.handleThemeProxy)
 	return mux
@@ -371,6 +373,7 @@ func devProxyUpstreamPath(basePath, requestPath string) string {
 	for _, assetPath := range []string{
 		"_build/",
 		"api/theme-page/",
+		"api/theme-styles/",
 		"api/theme-watch/",
 	} {
 		fullPath := basePath + assetPath
@@ -426,6 +429,7 @@ func rewriteDevProxyBody(body []byte, basePath string) []byte {
 		"/@react-refresh",
 		"/node_modules/.vite/",
 		"/api/theme-page/",
+		"/api/theme-styles",
 		"/api/theme-watch/",
 	} {
 		rewritten = rewriteAbsoluteDevProxyPath(rewritten, pathPrefix, strings.TrimSuffix(basePath, "/")+pathPrefix)
