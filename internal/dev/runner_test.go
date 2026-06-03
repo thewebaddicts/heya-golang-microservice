@@ -81,6 +81,9 @@ func TestViteProxyConfigSourceMergesAllowedHostAndHMR(t *testing.T) {
 		`allowedHosts = Array.from(new Set([...hostList, proxyAllowedHost]))`,
 		`protocol: "wss"`,
 		`clientPort: 443`,
+		`const proxyOptimizeDepsInclude = ["lucide-solid","lucide-solid/icons/chevron-left","lucide-solid/icons/chevron-right"]`,
+		`const viteOptimizeDeps = mergeProxyOptimizeDeps(vite.optimizeDeps)`,
+		`include: Array.from(new Set([...include, ...proxyOptimizeDepsInclude]))`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("viteProxyConfigSource() missing %q in:\n%s", want, got)

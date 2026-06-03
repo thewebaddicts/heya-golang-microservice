@@ -54,6 +54,12 @@ type LocalRunner struct {
 	logger *slog.Logger
 }
 
+var viteProxyOptimizeDepsInclude = []string{
+	"lucide-solid",
+	"lucide-solid/icons/chevron-left",
+	"lucide-solid/icons/chevron-right",
+}
+
 func NewLocalRunner(cfg config.Config, logger *slog.Logger) *LocalRunner {
 	return &LocalRunner{cfg: cfg, logger: logger}
 }
@@ -415,6 +421,8 @@ func viteProxyConfigSource(originalConfigPath, publicHost, basePath string) stri
 	builder.WriteString(jsString(publicHost))
 	builder.WriteString("\nconst proxyHMRPath = ")
 	builder.WriteString(jsString(hmrPath))
+	builder.WriteString("\nconst proxyOptimizeDepsInclude = ")
+	builder.WriteString(jsStringArray(viteProxyOptimizeDepsInclude))
 	builder.WriteString("\n")
 	if originalConfigPath != "" {
 		builder.WriteString("import originalConfigModule from ")
@@ -424,9 +432,22 @@ func viteProxyConfigSource(originalConfigPath, publicHost, basePath string) stri
 		builder.WriteString("const originalConfig = {}\n")
 	}
 	builder.WriteString(`
+function mergeProxyOptimizeDeps(configOptimizeDeps) {
+  const optimizeDeps = configOptimizeDeps && typeof configOptimizeDeps === "object" ? configOptimizeDeps : {}
+  const include = Array.isArray(optimizeDeps.include) ? optimizeDeps.include : []
+  return {
+    ...optimizeDeps,
+    include: Array.from(new Set([...include, ...proxyOptimizeDepsInclude])),
+  }
+}
+
 function mergeProxyConfig(config) {
   const baseConfig = config && typeof config === "object" ? config : {}
   const server = baseConfig.server && typeof baseConfig.server === "object" ? baseConfig.server : {}
+  const vite = baseConfig.vite && typeof baseConfig.vite === "object" ? baseConfig.vite : {}
+  const hasNestedViteConfig = Object.keys(vite).length > 0
+  const optimizeDeps = mergeProxyOptimizeDeps(baseConfig.optimizeDeps)
+  const viteOptimizeDeps = mergeProxyOptimizeDeps(vite.optimizeDeps)
   let allowedHosts = server.allowedHosts
   if (allowedHosts !== true) {
     const hostList = Array.isArray(allowedHosts) ? allowedHosts : []
@@ -450,6 +471,14 @@ function mergeProxyConfig(config) {
       allowedHosts,
       hmr,
     },
+    ...(hasNestedViteConfig
+      ? {
+          vite: {
+            ...vite,
+            optimizeDeps: viteOptimizeDeps,
+          },
+        }
+      : { optimizeDeps }),
   }
 }
 
@@ -469,6 +498,14 @@ func jsString(value string) string {
 	encoded, err := json.Marshal(value)
 	if err != nil {
 		return `""`
+	}
+	return string(encoded)
+}
+
+func jsStringArray(values []string) string {
+	encoded, err := json.Marshal(values)
+	if err != nil {
+		return `[]`
 	}
 	return string(encoded)
 }
