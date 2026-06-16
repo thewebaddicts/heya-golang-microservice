@@ -2,6 +2,7 @@ package dev
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -156,6 +157,50 @@ func (l *Lease) Release(ctx context.Context) error {
 		l.err = l.manager.release(ctx, l.key)
 	})
 	return l.err
+}
+
+func (m *Manager) Shutdown(ctx context.Context) error {
+	type stopTarget struct {
+		result RunResult
+	}
+
+	m.mu.Lock()
+	targets := make([]stopTarget, 0, len(m.sessions))
+	for key, session := range m.sessions {
+		if session.idleTimer != nil {
+			session.idleTimer.Stop()
+			session.idleTimer = nil
+		}
+		session.connections = 0
+		session.stopping = true
+		if session.result.PID != "" {
+			targets = append(targets, stopTarget{
+				result: session.result,
+			})
+		}
+		delete(m.sessions, key)
+	}
+	m.mu.Unlock()
+
+	var joinedErr error
+	for _, target := range targets {
+		if err := m.runner.Stop(ctx, target.result); err != nil {
+			m.logger.Error("failed to stop SolidJS dev server during shutdown",
+				"error", err,
+				"projectPath", target.result.ProjectPath,
+				"port", target.result.Port,
+				"pid", target.result.PID,
+			)
+			joinedErr = errors.Join(joinedErr, err)
+			continue
+		}
+		m.logger.Info("stopped SolidJS dev server during shutdown",
+			"projectPath", target.result.ProjectPath,
+			"port", target.result.Port,
+			"pid", target.result.PID,
+		)
+	}
+	return joinedErr
 }
 
 func (m *Manager) release(ctx context.Context, key string) error {

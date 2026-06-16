@@ -58,6 +58,10 @@ func NewServer(cfg config.Config, runner dev.Runner, logger *slog.Logger) *Serve
 	}
 }
 
+func (s *Server) Shutdown(ctx context.Context) error {
+	return s.manager.Shutdown(ctx)
+}
+
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.handleHealth)

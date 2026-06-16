@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -98,7 +99,7 @@ func (r *LocalRunner) Run(ctx context.Context, req RunRequest) (RunResult, error
 	command := shellDevCommand(r.cfg.NPMBin, bindHost, basePath, proxyConfigFile, port)
 	cmd := exec.Command(r.cfg.CommandShell, shellArgs(r.cfg.CommandShell, command)...)
 	cmd.Dir = projectDir
-	cmd.Env = devServerEnvironment(os.Environ(), req.DevServerPublicHost)
+	cmd.Env = managedDevServerEnvironment(devServerEnvironment(os.Environ(), req.DevServerPublicHost), r.cfg.LogDir)
 	cmd.Stdout = logWriter
 	cmd.Stderr = logWriter
 	cmd.Stdin = nil
@@ -278,6 +279,172 @@ func probeHTTPReady(ctx context.Context, url string) (bool, error) {
 	return resp.StatusCode >= 200 && resp.StatusCode < 500, nil
 }
 
+type staleLocalProcessGroup struct {
+	PGID    int
+	PIDs    []int
+	Reason  string
+	Command string
+}
+
+func CleanupStaleLocalProcesses(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
+	if logger == nil {
+		logger = slog.Default()
+	}
+
+	groups, err := findStaleLocalProcessGroups(cfg)
+	if err != nil {
+		return err
+	}
+
+	var joinedErr error
+	for _, group := range groups {
+		logger.Warn("stopping stale SolidJS dev server process group",
+			"pgid", group.PGID,
+			"pids", group.PIDs,
+			"reason", group.Reason,
+			"command", group.Command,
+		)
+		if err := terminateProcessGroup(ctx, group.PGID); err != nil {
+			logger.Error("failed to stop stale SolidJS dev server process group",
+				"pgid", group.PGID,
+				"pids", group.PIDs,
+				"error", err,
+			)
+			joinedErr = errors.Join(joinedErr, err)
+		}
+	}
+	return joinedErr
+}
+
+func findStaleLocalProcessGroups(cfg config.Config) ([]staleLocalProcessGroup, error) {
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read /proc: %w", err)
+	}
+
+	currentPGID := syscall.Getpgrp()
+	legacyConfigDir := filepath.Join(filepath.Clean(cfg.LogDir), "vite-proxy-configs")
+	groupsByPGID := make(map[int]*staleLocalProcessGroup)
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		pid, err := strconv.Atoi(entry.Name())
+		if err != nil {
+			continue
+		}
+
+		cmdline, err := readProcCommandLine(pid)
+		if err != nil || len(cmdline) == 0 {
+			continue
+		}
+		reason := staleLocalProcessReason(pid, cmdline, legacyConfigDir)
+		if reason == "" {
+			continue
+		}
+
+		pgid, err := syscall.Getpgid(pid)
+		if err != nil || pgid <= 0 || pgid == currentPGID {
+			continue
+		}
+
+		group, ok := groupsByPGID[pgid]
+		if !ok {
+			group = &staleLocalProcessGroup{
+				PGID:    pgid,
+				Reason:  reason,
+				Command: commandSummary(cmdline),
+			}
+			groupsByPGID[pgid] = group
+		}
+		if group.Reason != reason && reason == "managed dev server environment marker" {
+			group.Reason = reason
+		}
+		group.PIDs = append(group.PIDs, pid)
+	}
+
+	groups := make([]staleLocalProcessGroup, 0, len(groupsByPGID))
+	for _, group := range groupsByPGID {
+		sort.Ints(group.PIDs)
+		groups = append(groups, *group)
+	}
+	sort.Slice(groups, func(i, j int) bool {
+		return groups[i].PGID < groups[j].PGID
+	})
+	return groups, nil
+}
+
+func staleLocalProcessReason(pid int, cmdline []string, legacyConfigDir string) string {
+	if processHasManagedDevServerEnv(pid) {
+		return "managed dev server environment marker"
+	}
+	if commandLooksLikeLegacyManagedDevServer(cmdline, legacyConfigDir) {
+		return "legacy vite proxy config path"
+	}
+	return ""
+}
+
+func readProcCommandLine(pid int) ([]string, error) {
+	data, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "cmdline"))
+	if err != nil {
+		return nil, err
+	}
+	return splitProcNul(data), nil
+}
+
+func processHasManagedDevServerEnv(pid int) bool {
+	data, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "environ"))
+	if err != nil {
+		return false
+	}
+	for _, entry := range splitProcNul(data) {
+		if entry == "HEYA_MANAGED_DEV_SERVER=1" {
+			return true
+		}
+	}
+	return false
+}
+
+func commandLooksLikeLegacyManagedDevServer(cmdline []string, legacyConfigDir string) bool {
+	legacyConfigDir = strings.TrimSpace(filepath.Clean(legacyConfigDir))
+	if legacyConfigDir == "" || legacyConfigDir == "." {
+		return false
+	}
+
+	command := strings.Join(cmdline, " ")
+	if !strings.Contains(command, legacyConfigDir+string(os.PathSeparator)) {
+		return false
+	}
+	if !strings.Contains(command, "--strictPort") {
+		return false
+	}
+	return strings.Contains(command, "npm run dev") || strings.Contains(command, "vinxi dev")
+}
+
+func splitProcNul(data []byte) []string {
+	raw := strings.Split(strings.TrimRight(string(data), "\x00"), "\x00")
+	values := raw[:0]
+	for _, value := range raw {
+		if value != "" {
+			values = append(values, value)
+		}
+	}
+	return values
+}
+
+func commandSummary(cmdline []string) string {
+	const maxSummaryLength = 240
+
+	summary := strings.Join(cmdline, " ")
+	if len(summary) <= maxSummaryLength {
+		return summary
+	}
+	return summary[:maxSummaryLength] + "..."
+}
+
 func (r *LocalRunner) devReadyTimeout() time.Duration {
 	if r.cfg.DevReadyTimeout > 0 {
 		return r.cfg.DevReadyTimeout
@@ -347,6 +514,15 @@ func devServerEnvironment(env []string, publicHost string) []string {
 		return env
 	}
 	return upsertEnv(env, "__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS", publicHost)
+}
+
+func managedDevServerEnvironment(env []string, logDir string) []string {
+	env = upsertEnv(env, "HEYA_MANAGED_DEV_SERVER", "1")
+	logDir = strings.TrimSpace(logDir)
+	if logDir == "" {
+		return env
+	}
+	return upsertEnv(env, "HEYA_MANAGED_DEV_LOG_DIR", logDir)
 }
 
 func upsertEnv(env []string, key, value string) []string {

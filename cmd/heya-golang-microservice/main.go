@@ -40,6 +40,12 @@ func main() {
 		"accountInfoTimeout", cfg.AccountInfoTimeout,
 	)
 
+	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), processStopTimeout(cfg.ProcessStopTimeout))
+	if err := dev.CleanupStaleLocalProcesses(cleanupCtx, cfg, logger); err != nil {
+		logger.Error("failed to clean up stale SolidJS dev server processes", "error", err)
+	}
+	cleanupCancel()
+
 	runner := dev.NewLocalRunner(cfg, logger)
 	api := httpapi.NewServer(cfg, runner, logger)
 
@@ -64,9 +70,21 @@ func main() {
 	select {
 	case <-ctx.Done():
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if err := server.Shutdown(shutdownCtx); err != nil {
-			logger.Error("failed to gracefully shutdown HTTP server", "error", err)
+		shutdownErr := server.Shutdown(shutdownCtx)
+		cancel()
+		if shutdownErr != nil {
+			logger.Error("failed to gracefully shutdown HTTP server", "error", shutdownErr)
+			_ = server.Close()
+		}
+
+		devShutdownCtx, devShutdownCancel := context.WithTimeout(context.Background(), processStopTimeout(cfg.ProcessStopTimeout))
+		devShutdownErr := api.Shutdown(devShutdownCtx)
+		devShutdownCancel()
+		if devShutdownErr != nil {
+			logger.Error("failed to stop SolidJS dev servers during shutdown", "error", devShutdownErr)
+		}
+
+		if shutdownErr != nil || devShutdownErr != nil {
 			os.Exit(1)
 		}
 		logger.Info("HTTP server stopped")
@@ -76,4 +94,11 @@ func main() {
 			os.Exit(1)
 		}
 	}
+}
+
+func processStopTimeout(value time.Duration) time.Duration {
+	if value > 0 {
+		return value
+	}
+	return 15 * time.Second
 }

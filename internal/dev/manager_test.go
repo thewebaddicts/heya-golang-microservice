@@ -191,6 +191,35 @@ func TestManagerRestartsWhenPublicHostChanges(t *testing.T) {
 	}
 }
 
+func TestManagerShutdownStopsActiveSessions(t *testing.T) {
+	runner := &fakeRunner{}
+	manager := NewManager(config.Config{
+		ProjectBaseDir:    "/tmp",
+		DefaultProjectDir: "/tmp/solid-app",
+		DefaultDevPort:    3002,
+		DevIdleTimeout:    time.Minute,
+	}, runner, slog.Default())
+
+	lease, err := manager.Acquire(context.Background(), RunRequest{})
+	if err != nil {
+		t.Fatalf("Acquire() error = %v", err)
+	}
+
+	if err := manager.Shutdown(context.Background()); err != nil {
+		t.Fatalf("Shutdown() error = %v", err)
+	}
+	if runner.stopCount != 1 {
+		t.Fatalf("stopCount after Shutdown() = %d, want 1", runner.stopCount)
+	}
+
+	if err := lease.Release(context.Background()); err != nil {
+		t.Fatalf("Release() after Shutdown() error = %v", err)
+	}
+	if runner.stopCount != 1 {
+		t.Fatalf("stopCount after Release() = %d, want 1", runner.stopCount)
+	}
+}
+
 func waitForManagerStopCount(t *testing.T, runner *fakeRunner, want int) {
 	t.Helper()
 

@@ -72,6 +72,18 @@ func TestDevServerEnvironmentAddsViteAllowedHost(t *testing.T) {
 	}
 }
 
+func TestManagedDevServerEnvironmentAddsMarker(t *testing.T) {
+	got := managedDevServerEnvironment([]string{"PATH=/usr/bin"}, "/tmp/heya-solidjs-manager/logs")
+	for _, want := range []string{
+		"HEYA_MANAGED_DEV_SERVER=1",
+		"HEYA_MANAGED_DEV_LOG_DIR=/tmp/heya-solidjs-manager/logs",
+	} {
+		if !containsEnv(got, want) {
+			t.Fatalf("environment does not contain %q: %#v", want, got)
+		}
+	}
+}
+
 func TestViteProxyConfigSourceMergesAllowedHostAndHMR(t *testing.T) {
 	got := viteProxyConfigSource(
 		"/srv/app/vite.config.ts",
@@ -207,5 +219,93 @@ func TestLocalLogFileIncludesProjectAndPort(t *testing.T) {
 	want := filepath.Join("/tmp/heya", "my-solid-app-3002-20260522T103000Z.log")
 	if got != want {
 		t.Fatalf("localLogFile() = %q, want %q", got, want)
+	}
+}
+
+func TestCommandLooksLikeLegacyManagedDevServer(t *testing.T) {
+	configDir := "/tmp/heya-solidjs-manager/logs/vite-proxy-configs"
+
+	tests := []struct {
+		name    string
+		cmdline []string
+		want    bool
+	}{
+		{
+			name: "npm dev command with generated proxy config",
+			cmdline: []string{
+				"npm",
+				"run",
+				"dev",
+				"--host",
+				"0.0.0.0",
+				"--port",
+				"12036",
+				"--strictPort",
+				"--config",
+				"/tmp/heya-solidjs-manager/logs/vite-proxy-configs/frontend-20260603T125119Z.mjs",
+			},
+			want: true,
+		},
+		{
+			name: "shell vinxi command with generated proxy config",
+			cmdline: []string{
+				"sh",
+				"-c",
+				"vinxi dev --host 0.0.0.0 --port 12036 --strictPort --config /tmp/heya-solidjs-manager/logs/vite-proxy-configs/frontend-20260603T125119Z.mjs",
+			},
+			want: true,
+		},
+		{
+			name: "generated config without dev command",
+			cmdline: []string{
+				"node",
+				"/tmp/heya-solidjs-manager/logs/vite-proxy-configs/frontend-20260603T125119Z.mjs",
+				"--strictPort",
+			},
+			want: false,
+		},
+		{
+			name: "dev command without generated config",
+			cmdline: []string{
+				"npm",
+				"run",
+				"dev",
+				"--strictPort",
+			},
+			want: false,
+		},
+		{
+			name: "dev command without strict port",
+			cmdline: []string{
+				"npm",
+				"run",
+				"dev",
+				"--config",
+				"/tmp/heya-solidjs-manager/logs/vite-proxy-configs/frontend-20260603T125119Z.mjs",
+			},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := commandLooksLikeLegacyManagedDevServer(tt.cmdline, configDir)
+			if got != tt.want {
+				t.Fatalf("commandLooksLikeLegacyManagedDevServer() = %t, want %t", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSplitProcNul(t *testing.T) {
+	got := splitProcNul([]byte("npm\x00run\x00dev\x00"))
+	want := []string{"npm", "run", "dev"}
+	if len(got) != len(want) {
+		t.Fatalf("splitProcNul() = %#v, want %#v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("splitProcNul()[%d] = %q, want %q", i, got[i], want[i])
+		}
 	}
 }
